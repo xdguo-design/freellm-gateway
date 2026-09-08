@@ -54,4 +54,6 @@ def test_admin_page_loads_before_admin_api_authentication():
     assert response.status_code == 200
     assert "Model Pool" in response.text
     assert 'id="auth-form"' in response.text
+    assert "Request Routing" in response.text
+    assert 'data-action="probe"' in response.text
     assert denied.status_code == 401

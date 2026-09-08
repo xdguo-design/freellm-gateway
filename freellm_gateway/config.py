@@ -10,6 +10,8 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 8765
     database: Path = Path("data/gateway.sqlite3")
+    catalog_output: Path = Path("data/catalog-export.json")
+    site_repo: Path | None = None
     api_token: str | None = None
     admin_token: str | None = None
 
@@ -27,6 +29,8 @@ class Settings:
             host=os.getenv("FREELLM_GATEWAY_HOST", cls.host),
             port=int(os.getenv("FREELLM_GATEWAY_PORT", str(cls.port))),
             database=Path(os.getenv("FREELLM_GATEWAY_DB", str(cls.database))),
+            catalog_output=Path(os.getenv("FREELLM_GATEWAY_CATALOG_OUTPUT", str(cls.catalog_output))),
+            site_repo=Path(os.environ["FREELLM_GATEWAY_SITE_REPO"]) if os.getenv("FREELLM_GATEWAY_SITE_REPO") else None,
             api_token=api_token,
             admin_token=admin_token,
         )

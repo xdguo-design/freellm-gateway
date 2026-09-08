@@ -70,6 +70,38 @@ def merge_into_site_offers(existing: list[dict], exported: dict[str, Any]) -> tu
     return offers, review
 
 
+def sync_catalog_to_site(exported: dict[str, Any], site_repo: str | Path) -> dict[str, Any]:
+    site_path = Path(site_repo)
+    offers_path = site_path / "data" / "offers.json"
+    review_path = site_path / "data" / "review-queue.json"
+    if not offers_path.exists():
+        raise FileNotFoundError(offers_path)
+    offers = json.loads(offers_path.read_text(encoding="utf-8"))
+    existing_review = json.loads(review_path.read_text(encoding="utf-8")) if review_path.exists() else []
+    merged_offers, new_review = merge_into_site_offers(offers, exported)
+    published_ids = {item.get("id") for item in exported.get("published", [])}
+    review_by_id = {item.get("id"): item for item in existing_review if item.get("id")}
+    review_by_id.update({item.get("id"): item for item in new_review if item.get("id")})
+    for item_id in published_ids:
+        review_by_id.pop(item_id, None)
+    review = list(review_by_id.values())
+    offers_text = json.dumps(merged_offers, ensure_ascii=False, indent=2) + "\n"
+    review_text = json.dumps(review, ensure_ascii=False, indent=2) + "\n"
+    changed = offers_text != offers_path.read_text(encoding="utf-8") or (
+        not review_path.exists() or review_text != review_path.read_text(encoding="utf-8")
+    )
+    if changed:
+        offers_path.write_text(offers_text, encoding="utf-8")
+        review_path.write_text(review_text, encoding="utf-8")
+    return {
+        "changed": changed,
+        "offers_path": str(offers_path),
+        "review_path": str(review_path),
+        "published": len(exported.get("published", [])),
+        "review": len(review),
+    }
+
+
 def _site_offer(entry: dict[str, Any], order: int) -> dict[str, Any]:
     register = entry.get("register")
     docs_url = entry.get("docsUrl") or register

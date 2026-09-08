@@ -65,3 +65,8 @@ class Repository:
             )
             for row in rows
         ]
+
+    def delete_route(self, route_id: str) -> bool:
+        with self.database.connect() as connection:
+            cursor = connection.execute("DELETE FROM routes WHERE id = ?", (route_id,))
+        return cursor.rowcount > 0

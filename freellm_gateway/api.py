@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse
 from pathlib import Path
 
 from .adapters.base import ProviderError
+from .catalog import export_catalog, sync_catalog_to_site
 from .discovery import discover_new_routes
 from .models import Provider
 from .repository import Repository
@@ -24,6 +25,8 @@ def create_app(
     secrets=None,
     api_token: str | None = None,
     admin_token: str | None = None,
+    catalog_output: str | Path | None = None,
+    site_repo: str | Path | None = None,
 ) -> FastAPI:
     api_token = api_token or token_urlsafe(32)
     admin_token = admin_token or token_urlsafe(32)
@@ -36,6 +39,8 @@ def create_app(
     app.state.gateway = gateway
     app.state.repository = repository
     app.state.secrets = secrets
+    app.state.catalog_output = Path(catalog_output or "data/catalog-export.json")
+    app.state.site_repo = Path(site_repo) if site_repo else None
 
     def require_token(
         authorization: Annotated[str | None, Header()] = None,
@@ -49,9 +54,14 @@ def create_app(
             raise HTTPException(status_code=401, detail="invalid admin token")
 
     def route_json(route):
+        provider = None
+        if repository:
+            provider = next((item for item in repository.list_providers() if item.id == route.provider_id), None)
+        state = gateway.health_states.get(route.id)
         return {
             "id": route.id,
             "provider_id": route.provider_id,
+            "provider_name": provider.name if provider else route.provider_id,
             "remote_model": route.remote_model,
             "display_name": route.display_name,
             "priority": route.priority,
@@ -62,11 +72,32 @@ def create_app(
             "public_docs_url": route.public_docs_url,
             "free_summary": route.free_summary,
             "catalog_status": route.catalog_status,
+            "health_detail": {
+                "consecutive_failures": state.consecutive_failures if state else 0,
+                "cooldown_until": state.cooldown_until if state else None,
+                "last_first_token_ms": state.last_first_token_ms if state else None,
+                "last_total_ms": state.last_total_ms if state else None,
+                "last_error_kind": state.last_error_kind if state else None,
+            },
         }
 
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/")
+    def service_info() -> dict:
+        return {
+            "service": "FreeLLM Gateway",
+            "status": "ok",
+            "api_base": "/v1",
+            "docs_url": "/docs",
+            "endpoints": {
+                "models": "/v1/models",
+                "chat_completions": "/v1/chat/completions",
+                "image_generations": "/v1/images/generations",
+            },
+        }
 
     @app.get("/admin", response_class=HTMLResponse)
     def admin_page():
@@ -75,6 +106,25 @@ def create_app(
         # remain protected by require_admin.
         template = Path(__file__).with_name("templates").joinpath("admin.html")
         return HTMLResponse(template.read_text(encoding="utf-8"))
+
+    @app.get("/api/admin/overview")
+    def admin_overview(authorization: Annotated[str | None, Header()] = None):
+        require_admin(authorization)
+        routes = gateway.routes
+        return {"data": {
+            "configured": len(routes),
+            "enabled": sum(route.enabled for route in routes),
+            "healthy": sum(route.health.value == "healthy" for route in routes),
+            "capabilities": sorted({capability for route in routes for capability in route.capabilities}),
+            "api_base": "/v1",
+            "admin_base": "/api/admin",
+            "docs_url": "/docs",
+        }}
+
+    @app.get("/api/admin/health")
+    def admin_health(authorization: Annotated[str | None, Header()] = None):
+        require_admin(authorization)
+        return {"data": [route_json(route) for route in gateway.routes]}
 
     @app.get("/v1/models")
     def list_models(authorization: Annotated[str | None, Header()] = None) -> dict:
@@ -95,6 +145,7 @@ def create_app(
     @app.post("/v1/chat/completions")
     async def chat_completions(payload: dict, authorization: Annotated[str | None, Header()] = None):
         require_token(authorization)
+        _require_known_model(payload.get("model", "auto"), gateway)
         if payload.get("stream"):
             return StreamingResponse(gateway.stream(payload), media_type="text/event-stream")
         try:
@@ -106,6 +157,7 @@ def create_app(
     async def image_generations(payload: dict, authorization: Annotated[str | None, Header()] = None):
         require_token(authorization)
         payload = {**payload, "task": "image_generation"}
+        _require_known_model(payload.get("model", "auto"), gateway)
         try:
             return await gateway.complete(payload, capability="image_generation")
         except ProviderError as error:
@@ -152,6 +204,81 @@ def create_app(
             repository.save_route(route)
             gateway.add_route(route)
         return {"data": [route_json(route) for route in new_routes]}
+
+    @app.patch("/api/admin/routes/{route_id}")
+    def admin_update_route(route_id: str, payload: dict, authorization: Annotated[str | None, Header()] = None):
+        require_admin(authorization)
+        try:
+            current = gateway.route(route_id)
+        except StopIteration as error:
+            raise HTTPException(status_code=404, detail="route not found") from error
+        updates = {}
+        for field in ("provider_id", "remote_model", "display_name", "endpoint", "public_url", "public_docs_url", "free_summary", "catalog_status"):
+            if field in payload:
+                value = payload[field]
+                if value is not None and not isinstance(value, str):
+                    raise HTTPException(status_code=422, detail=f"{field} must be a string or null")
+                updates[field] = value
+        if "priority" in payload:
+            if not isinstance(payload["priority"], int) or payload["priority"] < 1:
+                raise HTTPException(status_code=422, detail="priority must be a positive integer")
+            updates["priority"] = payload["priority"]
+        if "enabled" in payload:
+            if not isinstance(payload["enabled"], bool):
+                raise HTTPException(status_code=422, detail="enabled must be boolean")
+            updates["enabled"] = payload["enabled"]
+        if "capabilities" in payload:
+            capabilities = payload["capabilities"]
+            if not isinstance(capabilities, list) or not capabilities or any(not isinstance(item, str) for item in capabilities):
+                raise HTTPException(status_code=422, detail="capabilities must be a non-empty string list")
+            updates["capabilities"] = frozenset(capabilities)
+        provider_id = updates.get("provider_id", current.provider_id)
+        if repository and not any(provider.id == provider_id for provider in repository.list_providers()):
+            raise HTTPException(status_code=422, detail="provider must exist before updating a route")
+        for field in ("endpoint", "public_url", "public_docs_url"):
+            if updates.get(field):
+                _require_public_url(updates[field], field)
+        credential = payload.get("credential")
+        if credential is not None:
+            if not isinstance(credential, str) or not credential:
+                raise HTTPException(status_code=422, detail="credential must be a non-empty string")
+            if app.state.secrets is None:
+                raise HTTPException(status_code=503, detail="secret storage is not configured")
+            updates["credential_ref"] = app.state.secrets.save(route_id, credential)
+        updated = replace(current, **updates)
+        adapter = gateway.adapters.get(route_id)
+        if repository and app.state.secrets and updated.credential_ref:
+            provider = next((item for item in repository.list_providers() if item.id == updated.provider_id), None)
+            adapter = adapter_for_route(updated, provider, app.state.secrets)
+        if repository:
+            repository.save_route(updated)
+        gateway.replace_route(updated, adapter)
+        return route_json(updated)
+
+    @app.delete("/api/admin/routes/{route_id}", status_code=204)
+    def admin_delete_route(route_id: str, authorization: Annotated[str | None, Header()] = None):
+        require_admin(authorization)
+        try:
+            gateway.remove_route(route_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="route not found") from error
+        if repository:
+            repository.delete_route(route_id)
+
+    @app.post("/api/admin/routes/{route_id}/probe")
+    async def admin_probe_route(route_id: str, authorization: Annotated[str | None, Header()] = None):
+        require_admin(authorization)
+        try:
+            await gateway.probe(route_id)
+        except StopIteration as error:
+            raise HTTPException(status_code=404, detail="route not found") from error
+        except ProviderError as error:
+            if repository:
+                repository.save_route(gateway.route(route_id))
+            raise HTTPException(status_code=error.status_code, detail=error.kind) from error
+        if repository:
+            repository.save_route(gateway.route(route_id))
+        return route_json(gateway.route(route_id))
 
     @app.post("/api/admin/routes", status_code=201)
     def admin_create_route(payload: dict, authorization: Annotated[str | None, Header()] = None):
@@ -202,6 +329,26 @@ def create_app(
                 repository.save_route(route)
         return {"data": [route_json(route) for route in gateway.routes]}
 
+    @app.post("/api/admin/catalog/export")
+    def admin_export_catalog(authorization: Annotated[str | None, Header()] = None):
+        require_admin(authorization)
+        providers = {provider.id: provider for provider in repository.list_providers()} if repository else {}
+        data = export_catalog(gateway.routes, providers, app.state.catalog_output)
+        return {"data": data, "path": str(app.state.catalog_output)}
+
+    @app.post("/api/admin/catalog/sync")
+    def admin_sync_catalog(authorization: Annotated[str | None, Header()] = None):
+        require_admin(authorization)
+        if app.state.site_repo is None:
+            raise HTTPException(status_code=503, detail="site repository is not configured")
+        providers = {provider.id: provider for provider in repository.list_providers()} if repository else {}
+        data = export_catalog(gateway.routes, providers, app.state.catalog_output)
+        try:
+            result = sync_catalog_to_site(data, app.state.site_repo)
+        except FileNotFoundError as error:
+            raise HTTPException(status_code=422, detail=f"site catalog file not found: {error}") from error
+        return {"data": {"catalog": data, "sync": result}}
+
     app.state.admin_token = admin_token
     return app
 
@@ -221,6 +368,11 @@ def _route_from_payload(payload: dict, priority: int):
         free_summary=payload.get("free_summary"),
         catalog_status=payload.get("catalog_status", "draft"),
     )
+
+
+def _require_known_model(model: str, gateway: ModelGateway) -> None:
+    if model != "auto" and not any(route.id == model for route in gateway.routes):
+        raise HTTPException(status_code=404, detail="model route not found")
 
 
 def _require_public_url(value: str, field: str) -> None:

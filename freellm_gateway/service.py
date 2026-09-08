@@ -33,6 +33,42 @@ class ModelGateway:
         if adapter is not None:
             self.adapters[route.id] = adapter
 
+    def replace_route(self, route: ModelRoute, adapter=None) -> None:
+        if not any(existing.id == route.id for existing in self.routes):
+            raise KeyError(route.id)
+        self.routes = [route if existing.id == route.id else existing for existing in self.routes]
+        self.health_states.setdefault(route.id, HealthState(status=route.health))
+        if adapter is not None:
+            self.adapters[route.id] = adapter
+
+    def remove_route(self, route_id: str) -> None:
+        if not any(route.id == route_id for route in self.routes):
+            raise KeyError(route_id)
+        self.routes = [route for route in self.routes if route.id != route_id]
+        self.adapters.pop(route_id, None)
+        self.health_states.pop(route_id, None)
+
+    async def probe(self, route_id: str) -> dict:
+        route = self.route(route_id)
+        adapter = self.adapters.get(route.id)
+        if adapter is None:
+            error = ProviderError("missing_adapter", 503, route.id, retriable=False)
+            self._record_error(route, error)
+            raise error
+        started = time.monotonic()
+        try:
+            result = await adapter.complete({
+                "model": route.remote_model,
+                "messages": [{"role": "user", "content": "Reply with OK"}],
+                "max_tokens": 1,
+            })
+        except ProviderError as error:
+            self._record_error(route, error)
+            raise
+        elapsed = (time.monotonic() - started) * 1000
+        self._record_success(route, elapsed)
+        return result
+
     async def complete(self, payload: dict, capability: str | None = None) -> dict:
         requested_model = payload.get("model", "auto")
         capability = capability or infer_capability(payload)

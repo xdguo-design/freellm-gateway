@@ -59,6 +59,19 @@ def test_chat_returns_503_when_no_route_is_available():
     assert response.status_code == 503
 
 
+def test_chat_returns_404_for_unknown_explicit_model():
+    route = ModelRoute(id="route-1", provider_id="p1", remote_model="remote-name", priority=1)
+    client = client_for([route])
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer api-token"},
+        json={"model": "missing-route", "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    assert response.status_code == 404
+
+
 def test_chat_stream_returns_server_sent_events():
     route = ModelRoute(id="route-1", provider_id="p1", remote_model="remote-name", priority=1)
     client = client_for([route])

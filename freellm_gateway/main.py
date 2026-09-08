@@ -22,6 +22,8 @@ def build_default_app():
         secrets=secrets,
         api_token=settings.api_token,
         admin_token=settings.admin_token,
+        catalog_output=settings.catalog_output,
+        site_repo=settings.site_repo,
     )
 
 
