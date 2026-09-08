@@ -69,8 +69,10 @@ def create_app(
         return {"status": "ok"}
 
     @app.get("/admin", response_class=HTMLResponse)
-    def admin_page(authorization: Annotated[str | None, Header()] = None):
-        require_admin(authorization)
+    def admin_page():
+        # The browser must be able to load the shell before JavaScript can
+        # prompt for the admin token. The data and mutation endpoints below
+        # remain protected by require_admin.
         template = Path(__file__).with_name("templates").joinpath("admin.html")
         return HTMLResponse(template.read_text(encoding="utf-8"))
 

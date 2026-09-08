@@ -19,7 +19,7 @@
     .status { border-radius:5px; padding:5px 8px; font-size:11px; } .ok { color:var(--green); border:1px solid #196c55; } .slow { color:var(--amber); border:1px solid #826125; } .bad { color:var(--red); border:1px solid #77383f; }
     .flow { display:flex; justify-content:space-between; align-items:center; color:#76b8ff; font-size:22px; margin:22px 0 30px; } .flow span { text-align:center; font-size:11px; color:var(--muted); } .rule { padding:13px 0; border-top:1px solid var(--line); display:flex; justify-content:space-between; }
     .toggle { background:var(--blue); width:38px; height:20px; border-radius:20px; position:relative; } .toggle:after { content:""; position:absolute; right:3px; top:3px; width:14px; height:14px; background:white; border-radius:50%; }
-    .sync { margin-top:18px; } @media(max-width:900px) { .app { grid-template-columns:1fr; } aside { display:none; } main { padding:20px; } .grid { grid-template-columns:1fr; } .stats { grid-template-columns:repeat(2,1fr); } }
+    .sync { margin-top:18px; } .auth-gate { position:fixed; inset:0; display:grid; place-items:center; background:rgba(7,16,31,.78); z-index:10; } .auth-gate[hidden] { display:none; } .auth-card { width:min(420px,calc(100vw - 36px)); } .auth-card h2 { margin-top:0; } .auth-form { display:flex; gap:8px; } .auth-form input { flex:1; min-width:0; border:1px solid #3d5a87; border-radius:8px; background:#0b1529; color:#fff; padding:10px 12px; } .auth-error { color:#f26b6b; min-height:20px; margin:10px 0 0; } @media(max-width:900px) { .app { grid-template-columns:1fr; } aside { display:none; } main { padding:20px; } .grid { grid-template-columns:1fr; } .stats { grid-template-columns:repeat(2,1fr); } }
   </style>
 </head>
 <body>
@@ -34,13 +34,40 @@
     </div>
   </main>
 </div>
+<div id="auth-gate" class="auth-gate" hidden>
+  <section class="card auth-card">
+    <h2>连接本地网关</h2>
+    <p class="muted">请输入管理员令牌以加载模型池。令牌只保存在当前浏览器会话中。</p>
+    <form id="auth-form" class="auth-form">
+      <input id="auth-token" type="password" autocomplete="off" placeholder="Admin token" aria-label="Admin token">
+      <button class="primary" type="submit">连接</button>
+    </form>
+    <p id="auth-error" class="auth-error" role="alert"></p>
+  </section>
+</div>
 <script>
-  const token = sessionStorage.getItem('freellm_admin_token') || prompt('Admin token');
-  if (token) sessionStorage.setItem('freellm_admin_token', token);
-  fetch('/api/admin/routes', {headers:{Authorization:'Bearer '+token}}).then(r=>r.json()).then(({data=[]})=>{
+  const gate = document.querySelector('#auth-gate');
+  const form = document.querySelector('#auth-form');
+  const input = document.querySelector('#auth-token');
+  const error = document.querySelector('#auth-error');
+  const renderRoutes = ({data=[]}) => {
     document.querySelector('#configured').textContent=data.length;
     document.querySelector('#healthy').textContent=data.filter(x=>x.health==='healthy').length;
     document.querySelector('#routes').innerHTML=data.map((x,i)=>`<tr><td class="handle">⠿</td><td>${x.priority}</td><td><b>${x.display_name||x.remote_model}</b><small>${x.remote_model}</small></td><td>${x.provider_id}</td><td>${(x.capabilities||[]).map(c=>`<span class="tag ${c.includes('image')?'image':''}">${c}</span>`).join('')}</td><td><span class="status ${x.health==='healthy'?'ok':x.health==='slow'?'slow':'bad'}">${x.health}</span></td></tr>`).join('') || '<tr><td colspan="6" class="muted">No routes configured.</td></tr>';
+  };
+  const loadRoutes = (token) => fetch('/api/admin/routes', {headers:{Authorization:'Bearer '+token}}).then(response => {
+    if (!response.ok) throw new Error('invalid admin token');
+    return response.json();
+  }).then(payload => { renderRoutes(payload); gate.hidden=true; });
+  const savedToken = sessionStorage.getItem('freellm_admin_token');
+  if (savedToken) loadRoutes(savedToken).catch(() => { sessionStorage.removeItem('freellm_admin_token'); gate.hidden=false; });
+  else gate.hidden=false;
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    const token = input.value.trim();
+    if (!token) return;
+    error.textContent='';
+    loadRoutes(token).then(() => sessionStorage.setItem('freellm_admin_token', token)).catch(() => { error.textContent='令牌无效，请重试。'; });
   });
 </script>
 </body></html>

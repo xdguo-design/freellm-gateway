@@ -44,13 +44,14 @@ def test_admin_can_create_route_with_public_metadata():
     assert app.state.gateway.routes[0].remote_model == "remote"
 
 
-def test_admin_page_is_available_only_with_admin_token():
+def test_admin_page_loads_before_admin_api_authentication():
     app = create_app(ModelGateway([], {}), api_token="api", admin_token="admin")
     client = TestClient(app)
 
-    denied = client.get("/admin")
-    response = client.get("/admin", headers={"Authorization": "Bearer admin"})
+    response = client.get("/admin")
+    denied = client.get("/api/admin/routes")
 
-    assert denied.status_code == 401
     assert response.status_code == 200
     assert "Model Pool" in response.text
+    assert 'id="auth-form"' in response.text
+    assert denied.status_code == 401
