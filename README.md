@@ -14,6 +14,8 @@ python -m freellm_gateway.cli run --host 127.0.0.1 --port 8765
 
 API 根地址：`http://127.0.0.1:8765/v1`。
 
+首次启动时，终端会打印随机生成的 API token 和 admin token。也可以先复制 `.env.example` 为 `.env`，自行设置两个长随机令牌。
+
 ## 安全边界
 
 默认只监听本机回环地址。真实令牌放在未纳入 Git 的 `.env` 或系统凭据存储中，不要写入目录导出文件。
