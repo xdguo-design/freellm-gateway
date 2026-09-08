@@ -38,9 +38,12 @@ flowchart LR
 - `ProbeResult`：探测耗时、首 Token 延迟、HTTP 状态、错误分类和时间。
 - `CatalogEntry`：仅含公开 Provider/模型/能力/注册地址/文档/免费说明/核验时间的脱敏记录。
 
+模型能力标签包括 `chat`、`long_context`、`vision`、`image_generation`、`audio`、`tools` 和 `stream`；路由还可记录上下文上限与输入/输出模态。
+
 ## 路由行为
 
 - `model=auto`：按优先级升序遍历候选模型。
+- 请求能力识别优先于排序：图片输入选择 `vision`，超长文本选择 `long_context`，图片生成任务选择 `image_generation`。
 - 指定模型：只调用匹配的启用路由，不自动改成其他模型。
 - 过滤条件：能力不匹配、手动禁用、处于熔断冷却期、超过延迟阈值或额度耗尽的路由跳过。
 - 失败分类：网络超时、HTTP 429、5xx、认证失败、额度耗尽、请求参数不支持分别记录。
@@ -54,6 +57,7 @@ flowchart LR
 - `GET /health`：网关进程健康检查。
 - `GET /v1/models`：返回可用公开模型及 `auto`，不暴露密钥和内部 endpoint 凭据。
 - `POST /v1/chat/completions`：接受 OpenAI Chat Completions 请求，支持 `auto` 和具体远程模型别名。
+- `POST /v1/images/generations`：选择 `image_generation` 能力路由。
 - `GET/POST/PATCH/DELETE /api/admin/providers`：本地管理 Provider。
 - `GET/POST/PATCH/DELETE /api/admin/routes`：管理模型、优先级和策略。
 - `POST /api/admin/routes/{id}/probe`：手动探测。
@@ -87,6 +91,7 @@ flowchart LR
 6. 密钥不会出现在响应、日志或目录导出中。
 7. 可生成网站目录导出，新增模型可进入草稿队列，已批准模型可刷新网站页面。
 8. 主要路由、熔断、同步和安全行为有自动化测试。
+9. 能根据文本、图片输入、长上下文和图片生成任务选择对应能力模型。
 
 ## 暂不实现
 

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>FreeLLM Gateway · Model Pool</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b1020; --panel:#101b31; --line:#243653; --blue:#4f7cff; --text:#f3f6ff; --muted:#9aa9c2; --green:#35d399; --amber:#f5b94c; --red:#f26b6b; }
+    * { box-sizing:border-box; } body { margin:0; background:linear-gradient(135deg,#07101f,#0d1730); color:var(--text); font:14px system-ui, sans-serif; }
+    .app { min-height:100vh; display:grid; grid-template-columns:230px 1fr; } aside { border-right:1px solid var(--line); padding:24px 16px; }
+    .brand { font-size:20px; font-weight:750; margin:8px 10px 42px; } .brand span { color:#55a4ff; }
+    nav a { display:block; padding:13px 14px; color:var(--muted); text-decoration:none; border-radius:9px; margin:4px 0; } nav a.active, nav a:hover { color:#fff; background:#173264; }
+    main { padding:34px 36px; max-width:1500px; width:100%; } header { display:flex; justify-content:space-between; align-items:center; margin-bottom:24px; }
+    h1 { margin:0; font-size:36px; } button { border:1px solid #3d5a87; background:#162743; color:#fff; border-radius:8px; padding:10px 16px; cursor:pointer; } button.primary { background:var(--blue); border-color:var(--blue); }
+    .grid { display:grid; grid-template-columns:minmax(600px,1fr) 330px; gap:18px; } .stats { grid-column:1/-1; display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
+    .card { background:rgba(16,27,49,.86); border:1px solid var(--line); border-radius:12px; padding:18px; } .stat b { display:block; font-size:28px; } .muted { color:var(--muted); }
+    table { width:100%; border-collapse:collapse; } th,td { padding:15px 10px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; } th { color:var(--muted); font-size:12px; } td small { display:block; color:var(--muted); margin-top:4px; }
+    .handle { color:var(--muted); cursor:grab; font-size:18px; } .tag { display:inline-block; border:1px solid #3276c7; color:#7fc1ff; border-radius:4px; padding:3px 6px; margin:2px; font-size:11px; } .tag.image { border-color:#4abdc1; color:#76e5e2; }
+    .status { border-radius:5px; padding:5px 8px; font-size:11px; } .ok { color:var(--green); border:1px solid #196c55; } .slow { color:var(--amber); border:1px solid #826125; } .bad { color:var(--red); border:1px solid #77383f; }
+    .flow { display:flex; justify-content:space-between; align-items:center; color:#76b8ff; font-size:22px; margin:22px 0 30px; } .flow span { text-align:center; font-size:11px; color:var(--muted); } .rule { padding:13px 0; border-top:1px solid var(--line); display:flex; justify-content:space-between; }
+    .toggle { background:var(--blue); width:38px; height:20px; border-radius:20px; position:relative; } .toggle:after { content:""; position:absolute; right:3px; top:3px; width:14px; height:14px; background:white; border-radius:50%; }
+    .sync { margin-top:18px; } @media(max-width:900px) { .app { grid-template-columns:1fr; } aside { display:none; } main { padding:20px; } .grid { grid-template-columns:1fr; } .stats { grid-template-columns:repeat(2,1fr); } }
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside><div class="brand"><span>✦</span> FreeLLM Gateway</div><nav><a>Overview</a><a class="active">Model Pool</a><a>Request Routing</a><a>Health Monitor</a><a>Catalog Sync</a><a>Settings</a></nav></aside>
+  <main>
+    <header><h1>Model Pool</h1><button class="primary">＋ Add model</button></header>
+    <div class="grid">
+      <div class="stats"><div class="card stat"><b id="configured">—</b><span class="muted">configured</span></div><div class="card stat"><b id="healthy">—</b><span class="muted">healthy</span></div><div class="card stat"><b>4</b><span class="muted">capabilities</span></div><div class="card stat"><b>auto</b><span class="muted">routing mode</span></div></div>
+      <section class="card"><table><thead><tr><th></th><th>Priority</th><th>Model</th><th>Provider</th><th>Capabilities</th><th>Status</th></tr></thead><tbody id="routes"><tr><td colspan="6" class="muted">Loading model routes…</td></tr></tbody></table></section>
+      <section><div class="card"><h2>Auto routing rules</h2><div class="flow"><span>◉<small>Request</small></span>→<span>⌕<small>Capability</small></span>→<span>♢<small>Health</small></span>→<span>≡<small>Priority</small></span>→<span>↻<small>Failover</small></span></div><div class="rule">Text chat <i class="toggle"></i></div><div class="rule">Long context <i class="toggle"></i></div><div class="rule">Image recognition <i class="toggle"></i></div><div class="rule">Image generation <i class="toggle"></i></div></div><div class="card sync"><h2>Catalog Sync</h2><p class="muted">New models can enter review before publishing to FreeLLM.</p><button>Review</button> <button class="primary">Publish to FreeLLM</button></div></section>
+    </div>
+  </main>
+</div>
+<script>
+  const token = sessionStorage.getItem('freellm_admin_token') || prompt('Admin token');
+  if (token) sessionStorage.setItem('freellm_admin_token', token);
+  fetch('/api/admin/routes', {headers:{Authorization:'Bearer '+token}}).then(r=>r.json()).then(({data=[]})=>{
+    document.querySelector('#configured').textContent=data.length;
+    document.querySelector('#healthy').textContent=data.filter(x=>x.health==='healthy').length;
+    document.querySelector('#routes').innerHTML=data.map((x,i)=>`<tr><td class="handle">⠿</td><td>${x.priority}</td><td><b>${x.display_name||x.remote_model}</b><small>${x.remote_model}</small></td><td>${x.provider_id}</td><td>${(x.capabilities||[]).map(c=>`<span class="tag ${c.includes('image')?'image':''}">${c}</span>`).join('')}</td><td><span class="status ${x.health==='healthy'?'ok':x.health==='slow'?'slow':'bad'}">${x.health}</span></td></tr>`).join('') || '<tr><td colspan="6" class="muted">No routes configured.</td></tr>';
+  });
+</script>
+</body></html>
