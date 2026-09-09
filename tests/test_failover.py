@@ -25,7 +25,7 @@ async def test_gateway_fails_over_in_priority_order():
         ModelRoute(id="second", provider_id="p2", remote_model="m2", priority=2),
     ]
     adapters = {
-        "first": FakeAdapter(error=ProviderError("rate_limited", 429)),
+        "first": FakeAdapter(error=ProviderError("rate_limit", 429)),
         "second": FakeAdapter(response={"id": "fallback", "choices": []}),
     }
     gateway = ModelGateway(routes, adapters)
@@ -42,7 +42,7 @@ async def test_gateway_returns_503_error_when_all_candidates_fail():
     routes = [ModelRoute(id="only", provider_id="p1", remote_model="m1", priority=1)]
     gateway = ModelGateway(
         routes,
-        {"only": FakeAdapter(error=ProviderError("server_error", 500))},
+        {"only": FakeAdapter(error=ProviderError("provider_5xx", 500))},
     )
 
     with pytest.raises(ProviderError) as error:
@@ -58,10 +58,10 @@ async def test_gateway_marks_failed_route_and_skips_it_on_next_request():
         ModelRoute(id="second", provider_id="p2", remote_model="m2", priority=2),
     ]
     adapters = {
-        "first": FakeAdapter(error=ProviderError("rate_limited", 429)),
+        "first": FakeAdapter(error=ProviderError("rate_limit", 429)),
         "second": FakeAdapter(response={"id": "fallback", "choices": []}),
     }
-    gateway = ModelGateway(routes, adapters, policies={"first": RoutePolicy(cooldown_seconds=60)})
+    gateway = ModelGateway(routes, adapters, policies={"first": RoutePolicy(backoff_schedule=(60, 300))})
 
     await gateway.complete({"model": "auto", "messages": []})
     await gateway.complete({"model": "auto", "messages": []})

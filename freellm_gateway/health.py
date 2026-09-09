@@ -6,9 +6,15 @@ from .models import HealthStatus
 @dataclass(frozen=True)
 class RoutePolicy:
     failure_threshold: int = 3
-    cooldown_seconds: int = 60
+    backoff_schedule: tuple[int, ...] = (60, 300, 1800, 7200)
     max_first_token_ms: int | None = None
     max_total_ms: int | None = None
+
+    def cooldown_for(self, consecutive_failures: int) -> int:
+        if not self.backoff_schedule:
+            return 0
+        step = min(max(consecutive_failures, 1), len(self.backoff_schedule)) - 1
+        return self.backoff_schedule[step]
 
 
 @dataclass(frozen=True)
@@ -17,6 +23,12 @@ class ProbeResult:
     first_token_ms: int | None = None
     total_ms: int | None = None
     error_kind: str | None = None
+    error_retryable: bool = False
+    rate_limited: bool = False
+    is_quota: bool = False
+    is_transient: bool = False
+    retry_after: float | None = None
+    probe: bool = False
 
 
 @dataclass(frozen=True)
@@ -27,6 +39,10 @@ class HealthState:
     last_first_token_ms: int | None = None
     last_total_ms: int | None = None
     last_error_kind: str | None = None
+    last_error_retryable: bool | None = None
+    last_is_quota: bool = False
+    last_is_transient: bool = False
+    last_retry_after: float | None = None
 
 
 def _is_slow(result: ProbeResult, policy: RoutePolicy) -> bool:
@@ -47,6 +63,10 @@ def record_probe(
         last_first_token_ms=result.first_token_ms,
         last_total_ms=result.total_ms,
         last_error_kind=result.error_kind,
+        last_error_retryable=None if result.ok else result.error_retryable,
+        last_is_quota=False if result.ok else result.is_quota,
+        last_is_transient=False if result.ok else result.is_transient,
+        last_retry_after=None if result.ok else result.retry_after,
     )
     if result.ok:
         return replace(
@@ -57,20 +77,27 @@ def record_probe(
             **common,
         )
 
+    if result.probe:
+        # Probe isolation: a manual health probe records diagnostics only. It
+        # never benches a route, so a broken probe (dead proxy, local network
+        # blip) cannot take production traffic down with it.
+        return replace(state, **common)
+
     failures = state.consecutive_failures + 1
-    if result.error_kind == "rate_limited":
+    if result.error_kind == "rate_limit":
         status = HealthStatus.RATE_LIMITED
     elif result.error_kind == "quota_exhausted":
         status = HealthStatus.QUOTA_EXHAUSTED
-    elif failures >= policy.failure_threshold:
+    elif result.error_retryable or failures >= policy.failure_threshold:
         status = HealthStatus.COOLDOWN
     else:
         status = HealthStatus.FAILED
-    cooldown_until = (
-        now + policy.cooldown_seconds
-        if status in {HealthStatus.RATE_LIMITED, HealthStatus.QUOTA_EXHAUSTED, HealthStatus.COOLDOWN}
-        else None
-    )
+    cooldown_until = None
+    if status in {HealthStatus.RATE_LIMITED, HealthStatus.QUOTA_EXHAUSTED, HealthStatus.COOLDOWN}:
+        cooldown = policy.cooldown_for(failures)
+        if result.retry_after:
+            cooldown = max(cooldown, result.retry_after)
+        cooldown_until = now + cooldown
     return replace(
         state,
         status=status,

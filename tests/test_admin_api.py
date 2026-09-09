@@ -57,3 +57,41 @@ def test_admin_page_loads_before_admin_api_authentication():
     assert "Request Routing" in response.text
     assert 'data-action="probe"' in response.text
     assert denied.status_code == 401
+
+
+def test_admin_page_exposes_model_fetch_key_and_registration_controls():
+    app = create_app(ModelGateway([], {}), api_token="api", admin_token="admin")
+    response = TestClient(app).get("/admin")
+
+    assert response.status_code == 200
+    assert 'name="credential"' in response.text
+    assert "API Key /" in response.text
+    assert 'data-action="fetch-models"' in response.text
+    assert 'data-action="register-provider"' in response.text
+
+
+def test_admin_page_exposes_bulk_model_controls():
+    app = create_app(ModelGateway([], {}), api_token="api", admin_token="admin")
+    response = TestClient(app).get("/admin")
+
+    assert response.status_code == 200
+    assert 'id="bulk-models"' in response.text
+    assert 'data-action="select-all-models"' in response.text
+    assert 'data-action="bulk-save-models"' in response.text
+    assert "/api/admin/routes/bulk" in response.text
+
+
+def test_admin_page_exposes_provider_model_list_markup():
+    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin")
+
+    assert response.status_code == 200
+    assert 'id="providers"' in response.text
+    assert "provider-model-list" in response.text
+    assert "noProviderModels" in response.text
+
+
+def test_admin_page_matches_catalog_provider_by_name_for_every_offer():
+    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin")
+
+    assert "catalogProviderFor" in response.text
+    assert "catalogProviderFor(offer)" in response.text

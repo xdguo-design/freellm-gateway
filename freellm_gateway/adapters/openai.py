@@ -1,6 +1,7 @@
 import httpx
 from collections.abc import AsyncIterator
 
+from ..failures import classify_failure, parse_retry_after
 from .base import ProviderError
 
 
@@ -23,8 +24,17 @@ class OpenAICompatibleAdapter:
             raise ProviderError("network_error", 502, str(exc)) from exc
 
         if response.is_error:
+            failure = classify_failure(
+                status_code=response.status_code,
+                message=response.text,
+                retry_after=parse_retry_after(response.headers.get("retry-after")),
+            )
             raise ProviderError(
-                _classify_error(response), response.status_code, response.text, response.status_code != 401
+                failure.type,
+                response.status_code,
+                response.text,
+                retriable=failure.retryable,
+                retry_after=failure.retry_after,
             )
         return response.json()
 
@@ -37,8 +47,17 @@ class OpenAICompatibleAdapter:
                 json=payload,
             ) as response:
                 if response.is_error:
+                    failure = classify_failure(
+                        status_code=response.status_code,
+                        message=response.text,
+                        retry_after=parse_retry_after(response.headers.get("retry-after")),
+                    )
                     raise ProviderError(
-                        _classify_error(response), response.status_code, response.text, response.status_code != 401
+                        failure.type,
+                        response.status_code,
+                        response.text,
+                        retriable=failure.retryable,
+                        retry_after=failure.retry_after,
                     )
                 async for line in response.aiter_lines():
                     if line:
@@ -62,22 +81,20 @@ class OpenAICompatibleAdapter:
         except httpx.HTTPError as exc:
             raise ProviderError("network_error", 502, str(exc)) from exc
         if response.is_error:
-            raise ProviderError(_classify_error(response), response.status_code, response.text, response.status_code != 401)
+            failure = classify_failure(
+                status_code=response.status_code,
+                message=response.text,
+                retry_after=parse_retry_after(response.headers.get("retry-after")),
+            )
+            raise ProviderError(
+                failure.type,
+                response.status_code,
+                response.text,
+                retriable=failure.retryable,
+                retry_after=failure.retry_after,
+            )
         data = response.json().get("data", [])
         return [item["id"] for item in data if isinstance(item, dict) and isinstance(item.get("id"), str)]
 
     async def aclose(self) -> None:
         await self.client.aclose()
-
-
-def _classify_error(response: httpx.Response) -> str:
-    body = response.text.lower()
-    if response.status_code == 429:
-        if any(word in body for word in ("quota", "insufficient", "exhaust")):
-            return "quota_exhausted"
-        return "rate_limited"
-    if response.status_code in {401, 403}:
-        return "authentication_error"
-    if response.status_code >= 500:
-        return "server_error"
-    return "request_error"

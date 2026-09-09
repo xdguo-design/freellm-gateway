@@ -11,7 +11,7 @@ from freellm_gateway.service import ModelGateway
 
 class ProbeAdapter:
     def __init__(self, response=None):
-        self.response = response or {"id": "probe", "choices": []}
+        self.response = response or {"id": "probe", "choices": [{"message": {"content": "128464"}}]}
         self.calls = []
 
     async def complete(self, payload):
@@ -110,3 +110,45 @@ def test_admin_can_sync_export_to_configured_site_repo(tmp_path):
 
     assert response.status_code == 200
     assert json.loads((site_repo / "data" / "offers.json").read_text(encoding="utf-8"))[0]["id"] == "first"
+
+
+def test_admin_can_read_the_freellm_discovery_catalog(monkeypatch):
+    client, _ = make_client(catalog_source="https://freellm.top/data/offers.json")
+
+    async def fake_fetch(source):
+        return [{"id": "groq-free", "productType": "api", "name": "Groq free plan"}]
+
+    monkeypatch.setattr("freellm_gateway.api.fetch_public_catalog", fake_fetch)
+    response = client.get(
+        "/api/admin/catalog/source?scope=models",
+        headers={"Authorization": "Bearer admin"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"][0]["id"] == "groq-free"
+
+
+def test_admin_lists_provider_and_routes_without_collapsing_same_model_name(tmp_path):
+    repository = Repository(Database(tmp_path / "gateway.sqlite3"))
+    repository.initialize()
+    repository.save_provider(Provider("p1", "Provider One", "openai", "https://p1.example/v1", "https://p1.example"))
+    repository.save_provider(Provider("p2", "Provider Two", "openai", "https://p2.example/v1", "https://p2.example"))
+    routes = [
+        ModelRoute(id="p1-a", provider_id="p1", remote_model="shared-model", priority=1),
+        ModelRoute(id="p1-b", provider_id="p1", remote_model="second-model", priority=2),
+        ModelRoute(id="p2-a", provider_id="p2", remote_model="shared-model", priority=3),
+    ]
+    for route in routes:
+        repository.save_route(route)
+    app = create_app(ModelGateway(routes, {}), repository=repository, api_token="api", admin_token="admin")
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer admin"}
+
+    providers = client.get("/api/admin/providers", headers=headers)
+    listed_routes = client.get("/api/admin/routes", headers=headers)
+
+    assert [item["id"] for item in providers.json()["data"]] == ["p1", "p2"]
+    assert [item["id"] for item in listed_routes.json()["data"]] == ["p1-a", "p1-b", "p2-a"]
+    assert [item["provider_name"] for item in listed_routes.json()["data"]] == [
+        "Provider One", "Provider One", "Provider Two"
+    ]

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FreeLLM Studio</title>
+  <style>
+    :root { color-scheme: light; --ink: #172033; --muted: #68748a; --line: #dfe5ef; --blue: #1744e8; --soft: #f5f7fb; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: linear-gradient(135deg, #101b31, #1d3560); color: #f3f6ff; font: 15px Inter, ui-sans-serif, system-ui, sans-serif; }
+    .card { width: min(460px, calc(100vw - 48px)); background: rgba(16, 28, 51, .82); border: 1px solid #2c4066; border-radius: 18px; padding: 34px 34px 28px; text-align: center; box-shadow: 0 22px 60px rgba(3, 8, 20, .45); }
+    .brand { display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 22px; font-weight: 750; letter-spacing: -.02em; }
+    .brand .mark { display: inline-grid; place-items: center; width: 38px; height: 38px; border-radius: 11px; background: linear-gradient(135deg, #1744e8, #55a4ff); font-size: 19px; }
+    .sub { margin: 6px 0 26px; color: #9aabc7; font-size: 13px; }
+    .status { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 24px; color: #dbe6ff; font-size: 14px; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: #f5b94c; box-shadow: 0 0 0 4px rgba(245, 185, 76, .18); animation: pulse 1.2s ease-in-out infinite; }
+    .dot.ok { background: #35d399; box-shadow: 0 0 0 4px rgba(53, 211, 153, .18); animation: none; }
+    .dot.bad { background: #f26b6b; box-shadow: 0 0 0 4px rgba(242, 107, 107, .18); animation: none; }
+    @keyframes pulse { 50% { opacity: .35; } }
+    .hint { margin: 18px 0 0; color: #8fa2c0; font-size: 12.5px; line-height: 1.7; }
+    .retry { margin-top: 16px; display: none; }
+    .retry button { border: 1px solid #3d5a87; background: #162743; color: #fff; border-radius: 9px; padding: 9px 16px; font: inherit; cursor: pointer; }
+    .retry button:hover { border-color: #77a4ff; }
+    code { color: #9fc4ff; font: 12.5px ui-monospace, Consolas, monospace; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="brand"><span class="mark">✦</span> FreeLLM Studio</div>
+    <div class="sub">本地模型网关 · 桌面版</div>
+    <div class="status"><span class="dot" id="dot"></span><span id="text">正在启动本地网关…</span></div>
+    <p class="hint" id="hint">正在启动本地网关，通常只需几秒。<br>Starting the local gateway — usually takes just a few seconds.</p>
+    <div class="retry" id="retry"><button type="button" onclick="location.reload()">重新尝试 Retry</button></div>
+  </div>
+  <script>
+    const GATEWAY = 'http://127.0.0.1:' + (window.__FREELLM_GATEWAY_PORT__ || 18900);
+    const dot = document.getElementById('dot');
+    const text = document.getElementById('text');
+    const deadline = Date.now() + 120000;
+    let failures = 0;
+
+    async function poll() {
+      try {
+        const res = await fetch(GATEWAY + '/health', { cache: 'no-store' });
+        if (res.ok) {
+          dot.classList.add('ok');
+          text.textContent = '网关已就绪，正在打开控制台…';
+          setTimeout(() => location.replace(GATEWAY + '/admin'), 350);
+          return;
+        }
+      } catch (error) { failures += 1; }
+      if (Date.now() > deadline) {
+        dot.classList.add('bad');
+        text.textContent = '网关启动超时 Gateway did not start';
+        document.getElementById('hint').innerHTML =
+          '请先尝试「重新尝试」；若反复失败，请把 <code>%APPDATA%\\top.freellm.desktop\\gateway-sidecar.log</code> 发给开发者。' +
+          '<br>If this keeps failing, send us <code>gateway-sidecar.log</code> from the app data folder.';
+        document.getElementById('retry').style.display = 'block';
+        return;
+      }
+      if (failures > 8) text.textContent = '仍在启动，请稍候… Still starting…';
+      setTimeout(poll, 700);
+    }
+    poll();
+  </script>
+</body>
+</html>

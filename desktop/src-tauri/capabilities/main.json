@@ -1,0 +1,6 @@
+{
+  "identifier": "main-capability",
+  "description": "Default permissions for the main window. The UI itself talks to the local gateway over plain HTTP and performs no Tauri IPC.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

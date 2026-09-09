@@ -12,6 +12,7 @@ class Settings:
     database: Path = Path("data/gateway.sqlite3")
     catalog_output: Path = Path("data/catalog-export.json")
     site_repo: Path | None = None
+    catalog_source: str = "https://freellm.top/data/offers.json"
     api_token: str | None = None
     admin_token: str | None = None
 
@@ -31,6 +32,7 @@ class Settings:
             database=Path(os.getenv("FREELLM_GATEWAY_DB", str(cls.database))),
             catalog_output=Path(os.getenv("FREELLM_GATEWAY_CATALOG_OUTPUT", str(cls.catalog_output))),
             site_repo=Path(os.environ["FREELLM_GATEWAY_SITE_REPO"]) if os.getenv("FREELLM_GATEWAY_SITE_REPO") else None,
+            catalog_source=os.getenv("FREELLM_GATEWAY_CATALOG_SOURCE", "https://freellm.top/data/offers.json"),
             api_token=api_token,
             admin_token=admin_token,
         )
