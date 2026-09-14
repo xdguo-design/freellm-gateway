@@ -47,15 +47,17 @@ class OpenAICompatibleAdapter:
                 json=payload,
             ) as response:
                 if response.is_error:
+                    await response.aread()
+                    message = response.text
                     failure = classify_failure(
                         status_code=response.status_code,
-                        message=response.text,
+                        message=message,
                         retry_after=parse_retry_after(response.headers.get("retry-after")),
                     )
                     raise ProviderError(
                         failure.type,
                         response.status_code,
-                        response.text,
+                        message,
                         retriable=failure.retryable,
                         retry_after=failure.retry_after,
                     )

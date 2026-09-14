@@ -3,10 +3,11 @@ from freellm_gateway.routing import select_candidates
 
 
 def route(route_id: str, priority: int, **kwargs) -> ModelRoute:
+    remote_model = kwargs.pop("remote_model", route_id)
     return ModelRoute(
         id=route_id,
         provider_id=f"provider-{route_id}",
-        remote_model=route_id,
+        remote_model=remote_model,
         priority=priority,
         **kwargs,
     )
@@ -32,6 +33,17 @@ def test_explicit_model_does_not_fail_over_to_another_model():
     candidates = select_candidates(routes, requested_model="wanted", capability="chat")
 
     assert [item.id for item in candidates] == ["wanted"]
+
+
+def test_explicit_model_matches_the_upstream_model_name():
+    routes = [
+        route("google-route", 1, remote_model="gemini-3.8-flash"),
+        route("other", 2),
+    ]
+
+    candidates = select_candidates(routes, requested_model="gemini-3.8-flash", capability="chat")
+
+    assert [item.id for item in candidates] == ["google-route"]
 
 
 def test_capability_filter_keeps_only_matching_routes():

@@ -39,12 +39,15 @@ def test_admin_provider_and_route_changes_survive_reload(tmp_path):
         json={
             "id": "groq-llama", "provider_id": "groq", "remote_model": "llama",
             "credential": "secret", "public_url": "https://console.groq.com",
+            "reasoning_effort": "medium",
         },
     )
 
     assert provider_response.status_code == 201
     assert route_response.status_code == 201
     assert repository.list_routes()[0].credential_ref.startswith("memory://")
+    assert repository.list_routes()[0].reasoning_effort == "medium"
 
     reloaded = create_app(repository=repository, secrets=secrets, api_token="api", admin_token="admin")
     assert [route.id for route in reloaded.state.gateway.routes] == ["groq-llama"]
+    assert reloaded.state.gateway.routes[0].reasoning_effort == "medium"

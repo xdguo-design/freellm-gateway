@@ -2,6 +2,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 
+SUPPORTED_PROVIDER_PROTOCOLS = frozenset({"openai", "anthropic", "gemini"})
+
+
 class HealthStatus(str, Enum):
     HEALTHY = "healthy"
     SLOW = "slow"
@@ -37,3 +40,4 @@ class ModelRoute:
     public_docs_url: str | None = None
     free_summary: str | None = None
     catalog_status: str = "draft"
+    reasoning_effort: str | None = None

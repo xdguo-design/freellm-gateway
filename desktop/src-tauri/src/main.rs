@@ -3,14 +3,14 @@
 //! FreeLLM Studio — desktop shell around the local FreeLLM gateway.
 //!
 //! On startup we spawn the bundled gateway sidecar (a PyInstaller build of
-//! `freellm_gateway.desktop_entry`) with per-launch random tokens, then open a
+//! `freellm_gateway.desktop_entry`) with tokens persisted in app data, then open a
 //! webview that shows a splash page. The splash polls the gateway health
 //! endpoint and redirects to the bundled admin UI once it is up. An
 //! initialization script seeds the admin token into sessionStorage so the UI
 //! connects without prompting, and routes every external link to the system
 //! browser instead of navigating the webview away.
 
-use std::sync::Mutex;
+use std::{path::Path, sync::Mutex};
 
 use tauri::{
     menu::{Menu, MenuItem},
@@ -21,6 +21,7 @@ use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 
 const GATEWAY_ORIGIN_HOST: &str = "127.0.0.1";
+const GATEWAY_PORT: u16 = 18900;
 
 struct GatewayChild(Mutex<Option<CommandChild>>);
 
@@ -30,14 +31,21 @@ fn random_token() -> String {
     (0..24).map(|_| format!("{:02x}", rng.gen::<u8>())).collect()
 }
 
-/// Grab a random free localhost port so instances never fight over a fixed
-/// port (a stale or second instance used to leave the splash timing out).
-fn pick_free_port() -> u16 {
-    std::net::TcpListener::bind((GATEWAY_ORIGIN_HOST, 0))
-        .expect("no free localhost port")
-        .local_addr()
-        .expect("local addr")
-        .port()
+fn load_or_create_token(path: &Path) -> std::io::Result<String> {
+    if let Ok(contents) = std::fs::read_to_string(path) {
+        let token = contents.trim();
+        if !token.is_empty() {
+            return Ok(token.to_string());
+        }
+    }
+    let token = random_token();
+    std::fs::write(path, &token)?;
+    Ok(token)
+}
+
+/// Keep the OpenAI-compatible base URL stable for external clients.
+fn gateway_port() -> u16 {
+    GATEWAY_PORT
 }
 
 fn gateway_port_up(port: u16) -> bool {
@@ -208,12 +216,14 @@ fn allow_navigation(url: &tauri::Url) -> bool {
         || s.starts_with("about:")
 }
 
-fn init_script(admin_token: &str, port: u16) -> String {
-    // __ADMIN_TOKEN__ / __PORT__ are replaced below instead of format! so the
-    // JS braces never fight the Rust formatter.
+fn init_script(admin_token: &str, api_token: &str, port: u16, ga_measurement_id: &str) -> String {
+    // __ADMIN_TOKEN__ / __API_TOKEN__ / __PORT__ / __GA_MEASUREMENT_ID__ are replaced below
+    // instead of format! so the JS braces never fight the Rust formatter.
     r#"(function () {
       try { sessionStorage.setItem('freellm_admin_token', '__ADMIN_TOKEN__'); } catch (e) {}
+      try { sessionStorage.setItem('freellm_api_token', '__API_TOKEN__'); } catch (e) {}
       window.__FREELLM_GATEWAY_PORT__ = __PORT__;
+      window.__FREELLM_GA_MEASUREMENT_ID__ = '__GA_MEASUREMENT_ID__';
       document.addEventListener('click', function (event) {
         var el = event.target;
         while (el && el.tagName !== 'A') { el = el.parentElement; }
@@ -227,7 +237,9 @@ fn init_script(admin_token: &str, port: u16) -> String {
       }, true);
     })();"#
         .replace("__ADMIN_TOKEN__", admin_token)
+        .replace("__API_TOKEN__", api_token)
         .replace("__PORT__", &port.to_string())
+        .replace("__GA_MEASUREMENT_ID__", ga_measurement_id)
 }
 
 fn resolve_gateway_exe(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
@@ -248,9 +260,6 @@ fn resolve_gateway_exe(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
 }
 
 fn main() {
-    let admin_token = random_token();
-    let api_token = random_token();
-
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // Second launch: focus the existing window instead of spawning a
@@ -266,8 +275,11 @@ fn main() {
         .setup(move |app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
+            let admin_token = load_or_create_token(&data_dir.join("gateway-admin.token"))?;
+            let api_token = load_or_create_token(&data_dir.join("gateway-api.token"))?;
+            let ga_measurement_id = std::env::var("FREELLM_GA_MEASUREMENT_ID").unwrap_or_default();
 
-            let port = pick_free_port();
+            let port = gateway_port();
             std::fs::write(data_dir.join("gateway.port"), port.to_string()).ok();
             let child = spawn_gateway(app.handle(), port, &admin_token, &api_token);
             *app.state::<GatewayChild>().0.lock().unwrap() = Some(child);
@@ -286,7 +298,12 @@ fn main() {
                 .title("FreeLLM Studio")
                 .inner_size(1320.0, 880.0)
                 .min_inner_size(980.0, 640.0)
-                .initialization_script(&init_script(&admin_token, port))
+                .initialization_script(&init_script(
+                    &admin_token,
+                    &api_token,
+                    port,
+                    &ga_measurement_id,
+                ))
                 .on_navigation(|url| {
                     if allow_navigation(url) {
                         return true;
@@ -350,3 +367,44 @@ fn main() {
                 }
             }
         });}
+
+#[cfg(test)]
+mod tests {
+    use super::load_or_create_token;
+    use std::fs;
+
+    #[test]
+    fn gateway_uses_stable_port_for_external_clients() {
+        assert_eq!(super::gateway_port(), 18900);
+    }
+
+    #[test]
+    fn token_is_reused_after_first_creation() {
+        let path = std::env::temp_dir().join(format!("freellm-token-test-{}.txt", std::process::id()));
+        let _ = fs::remove_file(&path);
+
+        let first = load_or_create_token(&path).expect("first token should be created");
+        let second = load_or_create_token(&path).expect("existing token should be loaded");
+
+        assert_eq!(first, second);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn init_script_exposes_api_token_to_the_local_ui() {
+        let script = super::init_script("admin-token", "api-token", 1234, "");
+
+        assert!(script.contains("freellm_admin_token"));
+        assert!(script.contains("freellm_api_token"));
+        assert!(script.contains("api-token"));
+        assert!(script.contains("1234"));
+    }
+
+    #[test]
+    fn init_script_injects_ga_measurement_id() {
+        let script = super::init_script("admin-token", "api-token", 1234, "G-TEST123");
+
+        assert!(script.contains("__FREELLM_GA_MEASUREMENT_ID__"));
+        assert!(script.contains("G-TEST123"));
+    }
+}

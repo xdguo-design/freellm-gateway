@@ -32,20 +32,21 @@ class Repository:
             connection.execute(
                 """INSERT INTO routes(
                    id, provider_id, remote_model, priority, capabilities, enabled,
-                   health, display_name, credential_ref, endpoint, public_url,
-                   public_docs_url, free_summary, catalog_status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   health, display_name, credential_ref, endpoint, reasoning_effort,
+                   public_url, public_docs_url, free_summary, catalog_status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(id) DO UPDATE SET provider_id=excluded.provider_id,
                      remote_model=excluded.remote_model, priority=excluded.priority,
                      capabilities=excluded.capabilities, enabled=excluded.enabled,
                      health=excluded.health, display_name=excluded.display_name,
                      credential_ref=excluded.credential_ref, endpoint=excluded.endpoint,
-                     public_url=excluded.public_url, public_docs_url=excluded.public_docs_url,
+                     reasoning_effort=excluded.reasoning_effort, public_url=excluded.public_url,
+                     public_docs_url=excluded.public_docs_url,
                      free_summary=excluded.free_summary, catalog_status=excluded.catalog_status""",
                 (
                     route.id, route.provider_id, route.remote_model, route.priority,
                     json.dumps(sorted(route.capabilities)), int(route.enabled), route.health.value,
-                    route.display_name, route.credential_ref, route.endpoint, route.public_url,
+                    route.display_name, route.credential_ref, route.endpoint, route.reasoning_effort, route.public_url,
                     route.public_docs_url, route.free_summary, route.catalog_status,
                 ),
             )
@@ -59,7 +60,7 @@ class Repository:
                 priority=row["priority"], capabilities=frozenset(json.loads(row["capabilities"])),
                 enabled=bool(row["enabled"]), health=HealthStatus(row["health"]),
                 display_name=row["display_name"], credential_ref=row["credential_ref"],
-                endpoint=row["endpoint"], public_url=row["public_url"],
+                endpoint=row["endpoint"], reasoning_effort=row["reasoning_effort"], public_url=row["public_url"],
                 public_docs_url=row["public_docs_url"], free_summary=row["free_summary"],
                 catalog_status=row["catalog_status"],
             )

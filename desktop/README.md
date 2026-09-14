@@ -3,7 +3,7 @@
 用 Tauri 把「本地网关 + 管理界面 + freellm.top 模型目录」封装成一个桌面应用：
 
 - 启动时自动拉起内置的网关 sidecar（PyInstaller 打包的 `freellm_gateway`，监听 `127.0.0.1:18900`，不与你手动跑的 18787 实例冲突）；
-- 每次启动随机生成 API / Admin 令牌，自动注入界面，用户无感知；
+- 首次启动生成并保存 API / Admin 令牌，后续启动保持不变，自动注入界面；
 - 窗口内先显示启动页，网关健康检查通过后自动进入管理台（模型池 / 目录发现 / 注册入口）；
 - **关闭窗口只是隐藏到系统托盘**，网关在后台继续服务；托盘左键单击恢复窗口，右键菜单提供「显示主界面 / 退出」——只有托盘菜单的「退出」才会真正结束应用；
 - 所有外链（Provider 注册页、文档、freellm.top）自动转交系统默认浏览器打开，webview 永远留在应用内；
@@ -55,3 +55,15 @@ npx tauri build --debug --no-bundle   # 快速验证，不打包安装器
 
 产物位置：`src-tauri/target/release/freellm-studio.exe`（便携版，sidecar 在同目录）与
 `src-tauri/target/release/bundle/nsis/*-setup.exe`（安装包）。
+
+## GA4 页面打开统计
+
+桌面启动页支持通过 `FREELLM_GA_MEASUREMENT_ID` 配置 Google Analytics 4 Measurement ID。
+配置后，每次新的桌面页面会话只上报一次 `page_view`；未配置时不会加载 Google Analytics 或发送统计请求。
+
+```powershell
+$env:FREELLM_GA_MEASUREMENT_ID = "G-XXXXXXXXXX"
+npx tauri dev
+```
+
+发布版启动时也必须在其运行环境中提供这个变量。统计不会上传 API Key、提示词或模型响应。

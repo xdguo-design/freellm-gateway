@@ -10,7 +10,7 @@ class RecordingAdapter:
 
     async def complete(self, payload):
         self.models.append(payload["model"])
-        return {"model": payload["model"], "choices": []}
+        return {"model": payload["model"], "choices": [{"message": {"content": "ok"}}]}
 
 
 @pytest.mark.asyncio

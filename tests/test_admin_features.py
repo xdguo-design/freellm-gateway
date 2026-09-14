@@ -19,6 +19,19 @@ class ProbeAdapter:
         return self.response
 
 
+class FakeSecrets:
+    def __init__(self):
+        self.values = {}
+
+    def save(self, name, value):
+        reference = f"memory://{name}"
+        self.values[reference] = value
+        return reference
+
+    def get(self, reference):
+        return self.values.get(reference)
+
+
 def make_client(routes=None, adapters=None, **kwargs):
     routes = routes or [ModelRoute(id="first", provider_id="p", remote_model="m1", priority=1)]
     gateway = ModelGateway(routes, adapters or {})
@@ -35,6 +48,37 @@ def test_public_root_describes_openai_compatible_api():
     assert response.json()["endpoints"]["chat_completions"] == "/v1/chat/completions"
 
 
+def test_admin_can_save_custom_provider_and_route(tmp_path):
+    repository = Repository(Database(tmp_path / "gateway.sqlite3"))
+    app = create_app(
+        ModelGateway([], {}),
+        repository=repository,
+        secrets=FakeSecrets(),
+        api_token="api",
+        admin_token="admin",
+    )
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer admin"}
+    provider = {
+        "id": "custom-openai",
+        "name": "Custom OpenAI",
+        "protocol": "openai",
+        "base_url": "https://llm.example/v1",
+        "official_url": "https://llm.example",
+    }
+
+    response = client.post(
+        "/api/admin/routes/bulk",
+        headers=headers,
+        json={"provider": provider, "models": [{"remote_model": "custom-model"}], "credential": "secret"},
+    )
+
+    assert response.status_code == 200
+    assert repository.list_providers()[0].id == "custom-openai"
+    assert repository.list_routes()[0].remote_model == "custom-model"
+    assert "secret" not in response.text
+
+
 def test_admin_overview_and_health_are_available_with_admin_token():
     client, _ = make_client()
     headers = {"Authorization": "Bearer admin"}
@@ -44,8 +88,30 @@ def test_admin_overview_and_health_are_available_with_admin_token():
 
     assert overview.status_code == 200
     assert overview.json()["data"]["configured"] == 1
+    assert overview.json()["data"]["api_token"] == "api"
     assert health.status_code == 200
     assert health.json()["data"][0]["id"] == "first"
+
+
+def test_admin_persists_normalized_priorities_when_loading_repository(tmp_path):
+    repository = Repository(Database(tmp_path / "gateway.sqlite3"))
+    repository.initialize()
+    repository.save_provider(Provider("p", "Provider", "openai", "https://api.example/v1", "https://example.com"))
+    routes = [
+        ModelRoute(id="first", provider_id="p", remote_model="m1", priority=1),
+        ModelRoute(id="second", provider_id="p", remote_model="m2", priority=3),
+        ModelRoute(id="third", provider_id="p", remote_model="m3", priority=3),
+    ]
+    for route in routes:
+        repository.save_route(route)
+
+    create_app(ModelGateway(routes, {}), repository=repository, api_token="api", admin_token="admin")
+
+    assert [(route.id, route.priority) for route in repository.list_routes()] == [
+        ("first", 1),
+        ("second", 2),
+        ("third", 3),
+    ]
 
 
 def test_admin_can_update_probe_and_delete_a_route():
@@ -126,6 +192,42 @@ def test_admin_can_read_the_freellm_discovery_catalog(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["data"][0]["id"] == "groq-free"
+
+
+def test_admin_catalog_marks_exact_enabled_disabled_and_unmatched_pool_status(tmp_path, monkeypatch):
+    repository = Repository(Database(tmp_path / "gateway.sqlite3"))
+    repository.initialize()
+    repository.save_provider(Provider("groq", "Groq", "openai", "https://api.groq.com/v1", "https://groq.com"))
+    routes = [
+        ModelRoute(id="groq-enabled", provider_id="groq", remote_model="llama-3", priority=1),
+        ModelRoute(id="groq-disabled", provider_id="groq", remote_model="qwen-2", priority=2, enabled=False),
+    ]
+    for route in routes:
+        repository.save_route(route)
+    client, _ = make_client(routes=routes, repository=repository, catalog_source="https://freellm.top/data/offers.json")
+
+    async def fake_fetch(source):
+        return [
+            {"id": "llama-offer", "provider": "Groq", "model": "llama-3", "productType": "api"},
+            {"id": "qwen-offer", "provider": "Groq", "model": "qwen-2", "productType": "api"},
+            {"id": "other-offer", "provider": "Other", "model": "other", "productType": "api"},
+        ]
+
+    monkeypatch.setattr("freellm_gateway.api.fetch_public_catalog", fake_fetch)
+    response = client.get("/api/admin/catalog/source?scope=models", headers={"Authorization": "Bearer admin"})
+
+    assert response.status_code == 200
+    statuses = {item["id"]: item["pool_status"] for item in response.json()["data"]}
+    assert statuses["llama-offer"] == {
+        "state": "enabled", "exact": True, "route_id": "groq-enabled", "enabled_count": 1, "disabled_count": 0,
+    }
+    assert statuses["qwen-offer"]["state"] == "disabled"
+    assert statuses["qwen-offer"]["exact"] is True
+    assert statuses["other-offer"] == {
+        "state": "not_added", "exact": False, "route_id": None, "enabled_count": 0, "disabled_count": 0,
+    }
+    assert "credential_ref" not in response.text
+    assert "keyring" not in response.text
 
 
 def test_admin_lists_provider_and_routes_without_collapsing_same_model_name(tmp_path):

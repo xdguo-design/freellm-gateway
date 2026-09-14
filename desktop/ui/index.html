@@ -34,10 +34,39 @@
   </div>
   <script>
     const GATEWAY = 'http://127.0.0.1:' + (window.__FREELLM_GATEWAY_PORT__ || 18900);
+    const GA_MEASUREMENT_ID = window.__FREELLM_GA_MEASUREMENT_ID__ || '';
+    const GA_PAGE_VIEW_KEY = 'freellm_ga_page_view_sent';
     const dot = document.getElementById('dot');
     const text = document.getElementById('text');
     const deadline = Date.now() + 120000;
     let failures = 0;
+
+    function reportGaPageView() {
+      if (!GA_MEASUREMENT_ID) return;
+
+      try {
+        if (sessionStorage.getItem(GA_PAGE_VIEW_KEY)) return;
+      } catch (error) {
+        return;
+      }
+
+      window.dataLayer = window.dataLayer || [];
+      window.gtag = function () { window.dataLayer.push(arguments); };
+      window.gtag('js', new Date());
+      window.gtag('config', GA_MEASUREMENT_ID, { send_page_view: false });
+
+      const script = document.createElement('script');
+      script.async = true;
+      script.src = 'https://www.googletagmanager.com/gtag/js?id=' + encodeURIComponent(GA_MEASUREMENT_ID);
+      script.onload = function () {
+        window.gtag('event', 'page_view', { page_title: document.title });
+        try { sessionStorage.setItem(GA_PAGE_VIEW_KEY, '1'); } catch (error) {}
+      };
+      script.onerror = function () {};
+      document.head.appendChild(script);
+    }
+
+    reportGaPageView();
 
     async function poll() {
       try {

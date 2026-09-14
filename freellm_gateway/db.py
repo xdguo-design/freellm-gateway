@@ -35,6 +35,7 @@ class Database:
                     display_name TEXT,
                     credential_ref TEXT,
                     endpoint TEXT,
+                    reasoning_effort TEXT,
                     public_url TEXT,
                     public_docs_url TEXT,
                     free_summary TEXT,
@@ -42,3 +43,6 @@ class Database:
                 );
                 """
             )
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(routes)")}
+            if "reasoning_effort" not in columns:
+                connection.execute("ALTER TABLE routes ADD COLUMN reasoning_effort TEXT")

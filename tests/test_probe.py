@@ -44,17 +44,29 @@ async def test_probe_sends_randomized_arithmetic_with_token_budget():
 
 
 @pytest.mark.asyncio
-async def test_probe_empty_output_raises_and_stays_isolated():
-    adapter = StaticAdapter(response={"choices": []})
+async def test_probe_without_completion_choices_raises_protocol_error_and_stays_isolated():
+    adapter = StaticAdapter(response={"choices": [{}]})
     gateway = make_gateway(adapter)
 
     with pytest.raises(ProviderError) as error:
         await gateway.probe("r")
 
-    assert error.value.kind == "empty_output"
+    assert error.value.kind == "provider_protocol_error"
     assert gateway.route("r").health == HealthStatus.HEALTHY
-    assert gateway.health_states["r"].last_error_kind == "empty_output"
+    assert gateway.health_states["r"].last_error_kind == "provider_protocol_error"
     assert is_eligible(gateway.health_states["r"], time.monotonic())
+
+
+@pytest.mark.asyncio
+async def test_probe_accepts_completion_envelope_with_empty_visible_text():
+    adapter = StaticAdapter(response={"choices": [{"message": {"content": ""}, "finish_reason": "stop"}]})
+    gateway = make_gateway(adapter)
+
+    result = await gateway.probe("r")
+
+    assert result["choices"][0]["message"]["content"] == ""
+    assert gateway.route("r").health == HealthStatus.HEALTHY
+    assert gateway.health_states["r"].last_error_kind is None
 
 
 @pytest.mark.asyncio

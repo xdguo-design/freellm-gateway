@@ -47,3 +47,22 @@ async def test_openai_adapter_streams_server_sent_events():
 
     assert b"data: one" in b"".join(chunks)
     await client.aclose()
+
+
+class ErrorStream(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        yield b'{"error":{"message":"invalid api key"}}'
+
+
+@pytest.mark.asyncio
+async def test_openai_adapter_classifies_streaming_error_without_response_not_read():
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(401, stream=ErrorStream()))
+    )
+    adapter = OpenAICompatibleAdapter("https://example.test/v1/chat/completions", "secret", client)
+
+    with pytest.raises(ProviderError) as error:
+        [chunk async for chunk in adapter.stream({"model": "demo", "messages": [], "stream": True})]
+
+    assert error.value.kind == "authentication_error"
+    await adapter.aclose()
