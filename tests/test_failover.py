@@ -126,7 +126,7 @@ async def test_gateway_fails_over_in_priority_order():
 
     assert result["id"] == "fallback"
     assert adapters["first"].calls == 1
-    assert adapters["second"].calls == 1
+    assert adapters["second"].calls == 2
 
 
 @pytest.mark.asyncio
@@ -194,9 +194,10 @@ async def test_authentication_error_disables_route_persists_and_fails_over():
     assert result["id"] == "fallback"
     assert gateway.route("bad").enabled is False
     assert gateway.route("bad").health == HealthStatus.DISABLED
-    assert [(route.id, route.enabled, route.health) for route in persisted] == [
-        ("bad", False, HealthStatus.DISABLED),
-    ]
+    assert persisted[0].id == "bad"
+    assert persisted[0].enabled is False
+    assert persisted[0].health == HealthStatus.DISABLED
+    assert {route.id: route.priority for route in persisted} == {"bad": 2, "good": 1}
     assert gateway._candidates("auto", "chat") == [gateway.route("good")]
 
 
@@ -245,7 +246,7 @@ async def test_gateway_fails_over_when_provider_returns_empty_completion():
 
     assert result["id"] == "good"
     assert adapters["unstable"].calls == 1
-    assert adapters["alibaba"].calls == 1
+    assert adapters["alibaba"].calls == 2
 
 
 @pytest.mark.asyncio

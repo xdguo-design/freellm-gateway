@@ -27,6 +27,20 @@ def make_gateway(adapter):
 
 
 @pytest.mark.asyncio
+async def test_manual_probe_does_not_change_route_priority():
+    routes = [
+        ModelRoute(id="first", provider_id="p", remote_model="m1", priority=1),
+        ModelRoute(id="second", provider_id="p", remote_model="m2", priority=2),
+    ]
+    adapter = StaticAdapter(response={"choices": [{"message": {"content": "ok"}}]})
+    gateway = ModelGateway(routes, {"first": adapter, "second": adapter})
+
+    await gateway.probe("second")
+
+    assert [(route.id, route.priority) for route in gateway.routes] == [("first", 1), ("second", 2)]
+
+
+@pytest.mark.asyncio
 async def test_probe_sends_randomized_arithmetic_with_token_budget():
     adapter = StaticAdapter(response={"choices": [{"message": {"content": "164821"}}]})
     gateway = make_gateway(adapter)
