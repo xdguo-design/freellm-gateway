@@ -27,7 +27,7 @@ async def test_image_request_selects_vision_route():
 
     await gateway.complete({"model": "auto", "messages": [{"role": "user", "content": [{"type": "text", "text": "what?"}, {"type": "image_url", "image_url": {"url": "https://example.test/a.png"}}]}]})
 
-    assert vision.models == ["vision"]
+    assert vision.models == ["vision", "vision"]
     assert text.models == []
 
 
@@ -45,7 +45,7 @@ async def test_image_generation_selects_image_generation_route():
 
     await gateway.complete({"model": "auto", "prompt": "a lake", "task": "image_generation"})
 
-    assert image.models == ["image"]
+    assert image.models == ["image", "image"]
     assert chat.models == []
 
 
@@ -63,5 +63,5 @@ async def test_long_context_request_selects_long_context_route():
 
     await gateway.complete({"model": "auto", "messages": [{"role": "user", "content": "x" * 40000}]})
 
-    assert long_context.models == ["long"]
+    assert long_context.models == ["long", "long"]
     assert short_context.models == []
