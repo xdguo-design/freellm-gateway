@@ -112,6 +112,12 @@ class ModelGateway:
             if enforce_routing:
                 self._demote_route(route.id)
             raise
+        except Exception as error:
+            protocol_error = ProviderError("provider_protocol_error", 502, str(error), retriable=False)
+            self._record_error(route, protocol_error, source=source)
+            if enforce_routing:
+                self._demote_route(route.id)
+            raise protocol_error from error
         elapsed = int((time.monotonic() - started) * 1000)
         if not is_probe_completion(result):
             error = ProviderError(
@@ -201,6 +207,44 @@ class ModelGateway:
                 )
         raise ProviderError("all_providers_failed", 503, "; ".join(str(error) for error in errors), retriable=False)
 
+    async def _preflight_stream(self, route: ModelRoute) -> None:
+        adapter = self.adapters.get(route.id)
+        if adapter is None or not hasattr(adapter, "stream"):
+            error = ProviderError("stream_not_supported", 501, route.id, retriable=False)
+            self._record_error(route, error, source="traffic")
+            self._demote_route(route.id)
+            raise error
+        started = time.monotonic()
+        try:
+            probe_request = {
+                "model": route.remote_model,
+                "messages": [{"role": "user", "content": build_probe_prompt()}],
+                "max_tokens": 64,
+                "stream": True,
+            }
+            if route.reasoning_effort is not None:
+                probe_request["reasoning_effort"] = route.reasoning_effort
+            emitted = False
+            async for _chunk in adapter.stream(probe_request):
+                emitted = True
+            if not emitted:
+                raise ProviderError(
+                    "empty_output",
+                    502,
+                    "provider returned an empty stream",
+                    retriable=False,
+                )
+        except ProviderError as error:
+            self._record_error(route, error, source="traffic")
+            self._demote_route(route.id)
+            raise
+        except Exception as error:
+            protocol_error = ProviderError("provider_protocol_error", 502, str(error), retriable=False)
+            self._record_error(route, protocol_error, source="traffic")
+            self._demote_route(route.id)
+            raise protocol_error from error
+        self._record_success(route, (time.monotonic() - started) * 1000)
+
     async def stream(self, payload: dict) -> AsyncIterator[bytes]:
         requested_model = payload.get("model", "auto")
         capability = infer_capability(payload)
@@ -215,6 +259,12 @@ class ModelGateway:
             raise ProviderError("no_available_model", 503, "no eligible model route", retriable=False)
         errors: list[ProviderError] = []
         for attempt, route in enumerate(candidates, 1):
+            if requested_model == "auto":
+                try:
+                    await self._preflight_stream(route)
+                except ProviderError as error:
+                    errors.append(error)
+                    continue
             adapter = self.adapters.get(route.id)
             if adapter is None or not hasattr(adapter, "stream"):
                 error = ProviderError("stream_not_supported", 501, route.id, retriable=False)
@@ -243,6 +293,8 @@ class ModelGateway:
                     )
                 elapsed_ms = int((time.monotonic() - started) * 1000)
                 self._record_success(route, elapsed_ms)
+                if requested_model == "auto":
+                    self._promote_route(route.id)
                 self._log_connection(
                     request_id=request_id, requested_model=requested_model, capability=capability,
                     stream=True, attempt=attempt, route=route, status="success",
@@ -251,6 +303,8 @@ class ModelGateway:
                 return
             except ProviderError as error:
                 self._record_error(route, error)
+                if requested_model == "auto":
+                    self._demote_route(route.id)
                 if emitted:
                     self._log_connection(
                         request_id=request_id, requested_model=requested_model, capability=capability,
@@ -269,6 +323,8 @@ class ModelGateway:
             except Exception as error:
                 protocol_error = ProviderError("provider_protocol_error", 502, str(error), retriable=False)
                 self._record_error(route, protocol_error)
+                if requested_model == "auto":
+                    self._demote_route(route.id)
                 if emitted:
                     self._log_connection(
                         request_id=request_id, requested_model=requested_model, capability=capability,
