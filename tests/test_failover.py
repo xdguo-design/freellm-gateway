@@ -111,6 +111,37 @@ async def test_auto_stream_preflight_failure_skips_route_and_promotes_successful
 
 
 @pytest.mark.asyncio
+async def test_auto_preflight_preserves_gpt_oss_model_and_reasoning_parameters():
+    route = ModelRoute(
+        id="groq",
+        provider_id="groq",
+        remote_model="openai/gpt-oss-120b",
+        priority=1,
+        reasoning_effort="medium",
+    )
+    adapter = SequenceAdapter(
+        {"choices": [{"message": {"content": "probe ok"}}]},
+        {"id": "result", "choices": [{"message": {"content": "pong"}}]},
+    )
+    gateway = ModelGateway([route], {route.id: adapter})
+
+    result = await gateway.complete({
+        "model": "auto",
+        "messages": [{"role": "user", "content": "hello"}],
+        "reasoning_effort": "high",
+    })
+
+    assert result["id"] == "result"
+    assert [payload["model"] for payload in adapter.calls] == [
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-120b",
+    ]
+    assert adapter.calls[0]["max_tokens"] == 64
+    assert adapter.calls[0]["reasoning_effort"] == "medium"
+    assert adapter.calls[1]["reasoning_effort"] == "high"
+
+
+@pytest.mark.asyncio
 async def test_gateway_fails_over_in_priority_order():
     routes = [
         ModelRoute(id="first", provider_id="p1", remote_model="m1", priority=1),
