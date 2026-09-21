@@ -159,6 +159,7 @@ class Database:
             connection.execute(
                 "ALTER TABLE routes ADD COLUMN status TEXT NOT NULL DEFAULT 'running'"
             )
+        # chunks.embedding_json for Hybrid RAG (existing DBs)
         try:
             chunk_cols = {
                 row["name"]

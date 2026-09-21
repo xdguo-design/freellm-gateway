@@ -94,11 +94,13 @@ def estimate_tokens(text: str) -> int:
     return max(1, len(tokenize(text)))
 
 
+# ── Local embedding (hashing trick / feature hashing) ─────────
+
 DEFAULT_EMBED_DIM = 256
 
 
 def local_embed(text: str, dim: int = DEFAULT_EMBED_DIM) -> list[float]:
-    """Deterministic dense vector via feature hashing of unigrams + bigrams."""
+    """Deterministic sparse-ish dense vector via feature hashing of unigrams + bigrams."""
     tokens = tokenize(text)
     if not tokens:
         return [0.0] * dim
@@ -110,6 +112,7 @@ def local_embed(text: str, dim: int = DEFAULT_EMBED_DIM) -> list[float]:
         idx = h % dim
         sign = 1.0 if (h >> 8) & 1 else -1.0
         vec[idx] += sign
+    # L2 normalize
     norm = math.sqrt(sum(v * v for v in vec)) or 1.0
     return [v / norm for v in vec]
 
@@ -144,6 +147,7 @@ async def embed_texts(
     *,
     remote_embed: Callable[[list[str]], Awaitable[list[list[float]]]] | None = None,
 ) -> list[list[float]]:
+    """Prefer remote embedding when provided; otherwise local hashing embed."""
     if remote_embed is not None and texts:
         try:
             vectors = await remote_embed(texts)
@@ -153,6 +157,8 @@ async def embed_texts(
             pass
     return [local_embed(t) for t in texts]
 
+
+# ── BM25 ──────────────────────────────────────────────────────
 
 def bm25_search(
     query: str,
@@ -217,11 +223,16 @@ def hybrid_search(
     alpha: float = 0.4,
     query_embedding: list[float] | None = None,
 ) -> list[tuple[str, float, str, dict]]:
-    """Hybrid BM25 + vector fusion. alpha = vector weight."""
+    """
+    corpus items: (chunk_id, content, embedding_or_none)
+    alpha: weight of vector score; (1-alpha) for BM25.
+    Returns (chunk_id, hybrid_score, content, detail).
+    """
     text_corpus = [(cid, content) for cid, content, _ in corpus]
     bm25_hits = bm25_search(query, text_corpus, top_k=max(top_k * 4, 20))
     bm25_map = _normalize_scores([(cid, s) for cid, s, _ in bm25_hits])
 
+    # vector scores
     q_vec = query_embedding or local_embed(query)
     vec_pairs: list[tuple[str, float]] = []
     content_map = {cid: content for cid, content, _ in corpus}
