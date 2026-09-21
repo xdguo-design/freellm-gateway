@@ -102,6 +102,46 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_usage_created_at ON usage_records(created_at);
                 CREATE INDEX IF NOT EXISTS idx_usage_app_id ON usage_records(app_id);
                 CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_records(model);
+                CREATE TABLE IF NOT EXISTS knowledge_bases (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    embedding_model_id TEXT,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS documents (
+                    id TEXT PRIMARY KEY,
+                    kb_id TEXT NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+                    title TEXT NOT NULL,
+                    filename TEXT,
+                    content_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    sha256 TEXT,
+                    char_count INTEGER NOT NULL DEFAULT 0,
+                    chunk_count INTEGER NOT NULL DEFAULT 0,
+                    error_message TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_documents_kb ON documents(kb_id);
+                CREATE TABLE IF NOT EXISTS chunks (
+                    id TEXT PRIMARY KEY,
+                    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                    kb_id TEXT NOT NULL,
+                    ordinal INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    token_estimate INTEGER NOT NULL DEFAULT 0,
+                    embedding_json TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_chunks_kb ON chunks(kb_id);
+                CREATE INDEX IF NOT EXISTS idx_chunks_document ON chunks(document_id);
+                CREATE TABLE IF NOT EXISTS document_blobs (
+                    document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+                    text_content TEXT NOT NULL
+                );
                 """
             )
             self._ensure_columns(connection)
@@ -119,3 +159,12 @@ class Database:
             connection.execute(
                 "ALTER TABLE routes ADD COLUMN status TEXT NOT NULL DEFAULT 'running'"
             )
+        try:
+            chunk_cols = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(chunks)").fetchall()
+            }
+            if chunk_cols and "embedding_json" not in chunk_cols:
+                connection.execute("ALTER TABLE chunks ADD COLUMN embedding_json TEXT")
+        except Exception:
+            pass
