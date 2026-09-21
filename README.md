@@ -1,6 +1,8 @@
-# FreeLLM Gateway
+# FreeLLM Gateway · AI Base (Phase 1)
 
 本地运行的多 Provider 模型网关，提供 OpenAI 兼容接口和 FreeLLM Studio 桌面控制台。
+
+> **Phase 1 平台骨架**：在原有模型路由之上，增加默认租户 / 应用凭证、调用审计证据链、用量统计，以及管理台「应用接入 / 审计日志 / 用量统计」页面，向「AI 底座」演进。
 
 ![FreeLLM Studio](docs/screenshots/freellm-studio-overview.png)
 
@@ -14,6 +16,10 @@
 - 从 `freellm.top` 目录自动带出 Provider、注册地址、文档和免费额度说明
 - API Key 仅保存在本机凭据存储，不写入目录导出或接口响应
 - Windows 桌面版启动时自动运行本地网关，不弹出 CMD 窗口
+- **应用接入**：创建 App、生成/撤销 Credential（密钥仅显示一次）
+- **审计日志**：每次 `/v1/*` 调用写入 requestId、模型、延迟、Token、错误类型
+- **用量统计**：近 N 天调用量、成功率、Token、按模型聚合
+- 统一 Header：`X-Request-ID`、`X-Tenant-ID`、`X-App-ID`（可选）
 
 ## 桌面版
 
