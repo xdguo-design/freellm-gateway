@@ -103,3 +103,42 @@ class UsageRecord:
     latency_ms: int
     success: bool
     created_at: str
+
+
+@dataclass(frozen=True)
+class KnowledgeBase:
+    id: str
+    tenant_id: str
+    name: str
+    description: str | None = None
+    status: str = "active"  # active | archived
+    embedding_model_id: str | None = None
+    created_at: str | None = None
+
+
+@dataclass(frozen=True)
+class Document:
+    id: str
+    kb_id: str
+    title: str
+    filename: str | None
+    content_type: str
+    status: str  # uploaded | parsing | ready | failed
+    sha256: str | None = None
+    char_count: int = 0
+    chunk_count: int = 0
+    error_message: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+@dataclass(frozen=True)
+class Chunk:
+    id: str
+    document_id: str
+    kb_id: str
+    ordinal: int
+    content: str
+    content_hash: str
+    token_estimate: int = 0
+    embedding_json: str | None = None  # JSON list[float]; optional for Hybrid RAG
