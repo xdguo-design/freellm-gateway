@@ -1,144 +1,148 @@
 from dataclasses import dataclass, field
-from enum import Enum
+from typing import Any, Optional
 
 
-class HealthStatus(str, Enum):
-    HEALTHY = "healthy"
-    SLOW = "slow"
-    FAILED = "failed"
-    RATE_LIMITED = "rate_limited"
-    QUOTA_EXHAUSTED = "quota_exhausted"
-    COOLDOWN = "cooldown"
-    DISABLED = "disabled"
-
-
-@dataclass(frozen=True)
-class Provider:
+@dataclass
+class ProviderConfig:
     id: str
     name: str
-    protocol: str
     base_url: str
-    official_url: str
-
-
-@dataclass(frozen=True)
-class ModelRoute:
-    id: str
-    provider_id: str
-    remote_model: str
-    priority: int
-    capabilities: frozenset[str] = field(default_factory=lambda: frozenset({"chat"}))
+    api_key_env: str = ""
     enabled: bool = True
-    health: HealthStatus = HealthStatus.HEALTHY
-    display_name: str | None = None
-    credential_ref: str | None = None
-    endpoint: str | None = None
-    public_url: str | None = None
-    public_docs_url: str | None = None
-    free_summary: str | None = None
-    catalog_status: str = "draft"
-    # Phase-1 platform fields (optional, backward compatible)
-    version: str = "v1"
-    status: str = "running"  # running | stopped | archived
+    priority: int = 100
+    timeout_s: float = 60.0
+    max_retries: int = 2
+    headers: dict[str, str] = field(default_factory=dict)
+    models: list[str] = field(default_factory=list)
+    capabilities: list[str] = field(default_factory=list)
 
 
-@dataclass(frozen=True)
+@dataclass
+class ModelRoute:
+    model: str
+    provider_id: str
+    upstream_model: str = ""
+    enabled: bool = True
+    weight: int = 100
+
+
+@dataclass
+class HealthSnapshot:
+    provider_id: str
+    ok: bool
+    latency_ms: float = 0.0
+    error: str = ""
+    checked_at: float = 0.0
+
+
+@dataclass
 class Tenant:
     id: str
-    code: str
     name: str
-    status: str = "active"  # active | suspended
+    created_at: float = 0.0
+    status: str = "active"  # active | disabled
 
 
-@dataclass(frozen=True)
+@dataclass
 class Application:
     id: str
     tenant_id: str
     name: str
+    description: str = ""
+    created_at: float = 0.0
     status: str = "active"  # active | disabled
-    description: str | None = None
-    created_at: str | None = None
 
 
-@dataclass(frozen=True)
+@dataclass
 class AppCredential:
     id: str
     app_id: str
-    key_id: str
-    secret_hash: str
-    status: str = "active"  # active | revoked
-    created_at: str | None = None
-    expire_at: str | None = None
-    # secret itself is never stored; only hash. Plaintext shown once at creation.
+    tenant_id: str
+    name: str
+    key_prefix: str
+    key_hash: str
+    created_at: float = 0.0
+    revoked_at: Optional[float] = None
+    last_used_at: Optional[float] = None
+    # plaintext only returned once at creation; never persisted
+    plaintext_key: Optional[str] = None
 
 
-@dataclass(frozen=True)
+@dataclass
 class AuditEvent:
+    id: str
     request_id: str
-    tenant_id: str | None
-    app_id: str | None
-    endpoint: str
-    model: str | None
-    route_id: str | None
-    status_code: int
-    latency_ms: int | None
-    prompt_tokens: int | None
-    completion_tokens: int | None
-    total_tokens: int | None
-    error_kind: str | None
-    created_at: str
-    meta_json: str | None = None
+    tenant_id: str
+    app_id: str
+    route: str
+    method: str
+    model: str = ""
+    provider_id: str = ""
+    status_code: int = 0
+    latency_ms: float = 0.0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    error_type: str = ""
+    error_message: str = ""
+    created_at: float = 0.0
+    meta_json: str = "{}"
 
 
-@dataclass(frozen=True)
+@dataclass
 class UsageRecord:
-    request_id: str
-    tenant_id: str | None
-    app_id: str | None
-    model: str | None
-    route_id: str | None
-    prompt_tokens: int
-    completion_tokens: int
-    total_tokens: int
-    latency_ms: int
-    success: bool
-    created_at: str
+    id: str
+    tenant_id: str
+    app_id: str
+    model: str
+    provider_id: str
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    request_count: int = 1
+    success_count: int = 0
+    error_count: int = 0
+    day: str = ""  # YYYY-MM-DD
+    created_at: float = 0.0
 
 
-@dataclass(frozen=True)
+@dataclass
 class KnowledgeBase:
     id: str
     tenant_id: str
     name: str
-    description: str | None = None
-    status: str = "active"  # active | archived
-    embedding_model_id: str | None = None
-    created_at: str | None = None
+    description: str = ""
+    created_at: float = 0.0
+    status: str = "active"  # active | disabled
+    doc_count: int = 0
+    chunk_count: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class Document:
     id: str
     kb_id: str
+    tenant_id: str
     title: str
-    filename: str | None
-    content_type: str
-    status: str  # uploaded | parsing | ready | failed
-    sha256: str | None = None
+    source: str = ""  # filename or url
+    content_type: str = "text/plain"
+    status: str = "ready"  # pending | ready | error
+    error_message: str = ""
     char_count: int = 0
     chunk_count: int = 0
-    error_message: str | None = None
-    created_at: str | None = None
-    updated_at: str | None = None
+    created_at: float = 0.0
+    updated_at: float = 0.0
 
 
-@dataclass(frozen=True)
+@dataclass
 class Chunk:
     id: str
-    document_id: str
+    doc_id: str
     kb_id: str
+    tenant_id: str
     ordinal: int
-    content: str
-    content_hash: str
+    text: str
     token_estimate: int = 0
-    embedding_json: str | None = None  # JSON list[float]; optional for Hybrid RAG
+    created_at: float = 0.0
+    # JSON list[float]; optional for Hybrid RAG
+    embedding_json: str = ""
