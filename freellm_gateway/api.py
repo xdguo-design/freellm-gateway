@@ -29,6 +29,60 @@ from .service import ModelGateway
 from .site_catalog import fetch_public_catalog, model_offers
 
 
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _execution_policy_json(policy: ExecutionPolicy) -> dict:
+    return {
+        "id": policy.id,
+        "tenant_id": policy.tenant_id,
+        "name": policy.name,
+        "strategy": policy.strategy.value,
+        "timeout_ms": policy.timeout_ms,
+        "max_concurrency": policy.max_concurrency,
+        "created_at": policy.created_at,
+    }
+
+
+def _model_group_json(group: ModelGroup, members: list[ModelGroupMember] | None = None) -> dict:
+    data = {
+        "id": group.id,
+        "tenant_id": group.tenant_id,
+        "name": group.name,
+        "policy_id": group.policy_id,
+        "description": group.description,
+        "status": group.status,
+        "created_at": group.created_at,
+    }
+    if members is not None:
+        data["members"] = [
+            {
+                "route_id": member.route_id,
+                "position": member.position,
+                "enabled": member.enabled,
+            }
+            for member in members
+        ]
+    return data
+
+
+def _model_run_json(run: ModelRun) -> dict:
+    return {
+        "id": run.id,
+        "tenant_id": run.tenant_id,
+        "app_id": run.app_id,
+        "group_id": run.group_id,
+        "strategy": run.strategy.value,
+        "status": run.status,
+        "request": json.loads(run.request_json),
+        "results": json.loads(run.results_json) if run.results_json else None,
+        "error_message": run.error_message,
+        "started_at": run.started_at,
+        "completed_at": run.completed_at,
+    }
+
+
 def create_app(
     gateway: ModelGateway | None = None,
     repository: Repository | None = None,
