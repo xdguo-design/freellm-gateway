@@ -77,11 +77,13 @@ python -m pytest -q
 
 ## 4. 当前回归结果
 
-2026-09-22 Provider Adapter 第一阶段最终回归结果：
+2026-09-22 Gemini Native Adapter 接入后的最终回归结果：
 
 ```text
-95 passed, 2 warnings in 1.79s
+102 passed, 2 warnings in 1.87s
 ```
+
+此前 Provider Adapter 第一阶段基线为 95 passed；新增 Gemini 原生适配、统一流式输出和模型发现测试后，当前基线提升为 102 passed。
 
 结论：
 
@@ -92,6 +94,14 @@ python -m pytest -q
 - Provider Adapter contract：通过
 - OpenAI request/response normalized mapping：通过
 - Gateway -> ProviderAdapter 调用路径：通过
+- Gemini generateContent 原生请求映射：通过
+- Gemini streamGenerateContent -> OpenAI SSE 兼容输出：通过
+- Gemini systemInstruction：通过
+- Gemini data-URL 多模态输入：通过
+- Gemini function calling / function response：通过
+- Gemini usageMetadata / finishReason 映射：通过
+- Gemini Models API 发现：通过
+- Gemini quota/error 分类：通过
 - API regression：通过
 - Route selection：通过
 - Failover：通过
@@ -318,8 +328,10 @@ python -m pytest -q
 
 - Provider Adapter 基础架构已通过全量自动化回归。
 - OpenAI Compatible 网络行为已通过 MockTransport 自动化测试。
-- 尚未在本阶段使用真实 OpenAI API Key 进行公网调用验收。
-- Gemini Native Adapter 尚未进入当前测试基线。
+- Gemini Native Adapter 已进入当前测试基线，并通过 generateContent、streamGenerateContent、systemInstruction、data-URL 图片、function calling、Models API 和错误映射测试。
+- Gateway Streaming 已优先支持统一 ProviderAdapter.stream_chat()，并继续保留旧 stream() 兼容路径。
+- 尚未在本阶段使用真实 OpenAI API Key 或 Gemini API Key 进行公网调用验收。
+- Gemini 对普通公网 image_url 不主动下载；当前 OpenAI 风格图片输入支持 data: URI，Gemini Files URI 可通过原生 fileData part 传入。这样避免网关引入任意 URL 下载导致 SSRF 风险。
 - 当前两个 CI warning 为上游 FastAPI / Starlette 测试依赖弃用提示，不影响测试结论。
 
 后续每增加一个原生 Provider，都应在本文件中更新对应的专项测试和最近一次全量回归结果。
