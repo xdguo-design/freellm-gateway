@@ -15,6 +15,7 @@ from fastapi.responses import HTMLResponse
 from pathlib import Path
 
 from .adapters.base import ProviderError
+from .adapters.gemini import GeminiNativeAdapter
 from .adapters.openai import OpenAICompatibleAdapter
 from .catalog import export_catalog, sync_catalog_to_site
 from .discovery import discover_new_routes
@@ -243,15 +244,23 @@ def create_app(
         provider = next((item for item in repository.list_providers() if item.id == provider_id), None)
         if provider is None:
             raise HTTPException(status_code=404, detail="provider not found")
-        if provider.protocol != "openai":
-            raise HTTPException(status_code=501, detail="provider model discovery is not supported")
         credential = payload.get("credential")
         if not isinstance(credential, str) or not credential.strip():
             raise HTTPException(status_code=422, detail="credential must be a non-empty string")
-        adapter = OpenAICompatibleAdapter(
-            provider.base_url.rstrip("/") + "/chat/completions",
-            credential.strip(),
-        )
+        if provider.protocol == "openai":
+            adapter = OpenAICompatibleAdapter(
+                provider.base_url.rstrip("/") + "/chat/completions",
+                credential.strip(),
+                provider_id=provider.id,
+            )
+        elif provider.protocol == "gemini":
+            adapter = GeminiNativeAdapter(
+                provider.base_url,
+                credential.strip(),
+                provider_id=provider.id,
+            )
+        else:
+            raise HTTPException(status_code=501, detail="provider model discovery is not supported")
         try:
             return {"data": await adapter.list_models()}
         except ProviderError as error:

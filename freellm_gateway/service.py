@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import replace
 
 from .adapters.base import ProviderError
-from .contracts import ChatRequest, ChatResponse
+from .contracts import ChatChunk, ChatRequest, ChatResponse
 from .health import HealthState, ProbeResult, RoutePolicy, effective_status, is_eligible, record_probe
 from .models import ModelRoute
 from .routing import select_candidates
@@ -182,16 +182,32 @@ class ModelGateway:
         errors: list[ProviderError] = []
         for route in candidates:
             adapter = self.adapters.get(route.id)
-            if adapter is None or not hasattr(adapter, "stream"):
+            if adapter is None or (
+                not hasattr(adapter, "stream_chat") and not hasattr(adapter, "stream")
+            ):
                 errors.append(ProviderError("stream_not_supported", 501, route.id, retriable=False))
                 continue
             request = dict(payload)
             request["model"] = route.remote_model
             emitted = False
             try:
-                async for chunk in adapter.stream(request):
-                    emitted = True
-                    yield chunk
+                stream_chat = getattr(adapter, "stream_chat", None)
+                if stream_chat is not None:
+                    normalized = ChatRequest.from_openai_payload(request)
+                    async for chunk in stream_chat(normalized):
+                        if not isinstance(chunk, ChatChunk):
+                            raise ProviderError(
+                                "invalid_response",
+                                502,
+                                "provider adapter returned an invalid stream chunk",
+                                retriable=False,
+                            )
+                        emitted = True
+                        yield chunk.to_openai_sse()
+                else:
+                    async for chunk in adapter.stream(request):
+                        emitted = True
+                        yield chunk
                 self._record_success(route, 0)
                 return
             except ProviderError as error:

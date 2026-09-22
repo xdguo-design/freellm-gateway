@@ -22,3 +22,32 @@ def test_runtime_builds_openai_adapter_from_persisted_provider_and_route(tmp_pat
 
     assert gateway.routes[0].id == "groq-llama"
     assert gateway.adapters["groq-llama"].endpoint.endswith("/chat/completions")
+
+
+def test_runtime_builds_gemini_native_adapter_from_persisted_provider_and_route(tmp_path):
+    repository = Repository(Database(tmp_path / "gateway.sqlite3"))
+    repository.initialize()
+    repository.save_provider(
+        Provider(
+            "google",
+            "Google Gemini",
+            "gemini",
+            "https://generativelanguage.googleapis.com/v1beta",
+            "https://ai.google.dev",
+        )
+    )
+    repository.save_route(
+        ModelRoute(
+            id="gemini-flash",
+            provider_id="google",
+            remote_model="gemini-3.8-flash",
+            priority=1,
+            credential_ref="keyring://test/gemini-flash",
+        )
+    )
+
+    gateway = build_gateway(repository, FakeSecrets())
+
+    adapter = gateway.adapters["gemini-flash"]
+    assert adapter.provider_id == "google"
+    assert adapter.base_url == "https://generativelanguage.googleapis.com/v1beta"
