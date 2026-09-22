@@ -1,10 +1,6 @@
-from collections.abc import Iterable
-
 from .models import HealthStatus, ModelRoute
 
-
 INELIGIBLE = {
-    HealthStatus.SLOW,
     HealthStatus.FAILED,
     HealthStatus.RATE_LIMITED,
     HealthStatus.QUOTA_EXHAUSTED,
@@ -14,7 +10,9 @@ INELIGIBLE = {
 
 
 def select_candidates(
-    routes: Iterable[ModelRoute], requested_model: str, capability: str
+    routes: list[ModelRoute],
+    requested_model: str,
+    capability: str,
 ) -> list[ModelRoute]:
     candidates = [
         route
