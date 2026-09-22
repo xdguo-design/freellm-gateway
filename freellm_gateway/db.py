@@ -142,6 +142,49 @@ class Database:
                     document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
                     text_content TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS execution_policies (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    strategy TEXT NOT NULL,
+                    timeout_ms INTEGER NOT NULL DEFAULT 60000,
+                    max_concurrency INTEGER NOT NULL DEFAULT 4,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_execution_policies_tenant ON execution_policies(tenant_id);
+                CREATE TABLE IF NOT EXISTS model_groups (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    policy_id TEXT NOT NULL REFERENCES execution_policies(id),
+                    description TEXT,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_model_groups_tenant ON model_groups(tenant_id);
+                CREATE TABLE IF NOT EXISTS model_group_members (
+                    group_id TEXT NOT NULL REFERENCES model_groups(id) ON DELETE CASCADE,
+                    route_id TEXT NOT NULL REFERENCES routes(id) ON DELETE CASCADE,
+                    position INTEGER NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    PRIMARY KEY(group_id, route_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_model_group_members_group ON model_group_members(group_id, position);
+                CREATE TABLE IF NOT EXISTS model_runs (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+                    app_id TEXT,
+                    group_id TEXT NOT NULL REFERENCES model_groups(id) ON DELETE CASCADE,
+                    strategy TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    request_json TEXT NOT NULL,
+                    results_json TEXT,
+                    error_message TEXT,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_model_runs_group ON model_runs(group_id, started_at);
+                CREATE INDEX IF NOT EXISTS idx_model_runs_tenant ON model_runs(tenant_id, started_at);
                 """
             )
             self._ensure_columns(connection)
