@@ -128,6 +128,48 @@ class ModelGateway:
                 errors.append(error)
         raise ProviderError("all_providers_failed", 503, "; ".join(str(error) for error in errors), retriable=False)
 
+    async def embed(self, payload: dict) -> dict:
+        """Route OpenAI-compatible embeddings. Requires routes with capability ``embedding``."""
+        requested_model = payload.get("model", "auto")
+        candidates = self._candidates(requested_model, "embedding")
+        if not candidates:
+            # Fallback: match by remote_model name among embedding-capable routes
+            candidates = self._candidates("auto", "embedding")
+            if requested_model != "auto":
+                candidates = [
+                    r for r in candidates
+                    if r.id == requested_model or r.remote_model == requested_model
+                    or (r.display_name and r.display_name == requested_model)
+                ]
+        if not candidates:
+            raise ProviderError(
+                "no_available_model",
+                503,
+                "no eligible embedding route (add capability 'embedding' to a route)",
+                retriable=False,
+            )
+
+        errors: list[ProviderError] = []
+        for route in candidates:
+            adapter = self.adapters.get(route.id)
+            if adapter is None or not hasattr(adapter, "embed"):
+                errors.append(ProviderError("missing_adapter", 500, route.id, retriable=False))
+                continue
+            request = dict(payload)
+            request["model"] = route.remote_model
+            started = time.monotonic()
+            try:
+                response = await adapter.embed(request)
+                self._record_success(route, (time.monotonic() - started) * 1000)
+                if isinstance(response, dict):
+                    response = dict(response)
+                    response.setdefault("model", route.id)
+                return response
+            except ProviderError as error:
+                self._record_error(route, error)
+                errors.append(error)
+        raise ProviderError("all_providers_failed", 503, "; ".join(str(error) for error in errors), retriable=False)
+
     async def stream(self, payload: dict) -> AsyncIterator[bytes]:
         candidates = self._candidates(payload.get("model", "auto"), infer_capability(payload))
         if not candidates:
@@ -198,6 +240,8 @@ class ModelGateway:
 def infer_capability(payload: dict) -> str:
     if payload.get("task") == "image_generation":
         return "image_generation"
+    if "input" in payload and "messages" not in payload and "prompt" not in payload:
+        return "embedding"
     if _contains_image(payload.get("messages", [])):
         return "vision"
     estimated_tokens = len(str(payload.get("messages", ""))) // 4
