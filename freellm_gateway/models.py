@@ -40,6 +40,12 @@ class ModelRoute:
     # Phase-1 platform fields (optional, backward compatible)
     version: str = "v1"
     status: str = "running"  # running | stopped | archived
+    # Structured model metadata used by capability/cost routing.
+    context_window: int | None = None
+    max_output_tokens: int | None = None
+    input_price_per_million: float | None = None
+    output_price_per_million: float | None = None
+    pricing_currency: str = "USD"
 
 
 @dataclass(frozen=True)
