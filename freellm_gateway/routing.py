@@ -1,6 +1,7 @@
 from .models import HealthStatus, ModelRoute
 
 INELIGIBLE = {
+    HealthStatus.SLOW,
     HealthStatus.FAILED,
     HealthStatus.RATE_LIMITED,
     HealthStatus.QUOTA_EXHAUSTED,
