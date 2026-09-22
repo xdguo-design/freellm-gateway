@@ -10,9 +10,14 @@ from .models import (
     AuditEvent,
     Chunk,
     Document,
+    ExecutionPolicy,
+    ExecutionStrategy,
     HealthStatus,
     KnowledgeBase,
+    ModelGroup,
+    ModelGroupMember,
     ModelRoute,
+    ModelRun,
     Provider,
     Tenant,
     UsageRecord,
@@ -391,3 +396,251 @@ class Repository:
             else:
                 row = connection.execute("SELECT COUNT(*) AS c FROM documents").fetchone()
         return int(row["c"])
+
+
+    # ── Multi-model execution ──────────────────────────────────────────
+
+    def save_execution_policy(self, policy: ExecutionPolicy) -> None:
+        with self.database.connect() as connection:
+            connection.execute(
+                """INSERT INTO execution_policies(
+                   id, tenant_id, name, strategy, timeout_ms, max_concurrency, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET tenant_id=excluded.tenant_id,
+                     name=excluded.name, strategy=excluded.strategy,
+                     timeout_ms=excluded.timeout_ms, max_concurrency=excluded.max_concurrency""",
+                (
+                    policy.id,
+                    policy.tenant_id,
+                    policy.name,
+                    policy.strategy.value,
+                    policy.timeout_ms,
+                    policy.max_concurrency,
+                    policy.created_at or _utcnow(),
+                ),
+            )
+
+    def get_execution_policy(self, policy_id: str) -> ExecutionPolicy | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM execution_policies WHERE id = ?",
+                (policy_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return ExecutionPolicy(
+            id=row["id"],
+            tenant_id=row["tenant_id"],
+            name=row["name"],
+            strategy=ExecutionStrategy(row["strategy"]),
+            timeout_ms=int(row["timeout_ms"]),
+            max_concurrency=int(row["max_concurrency"]),
+            created_at=row["created_at"],
+        )
+
+    def list_execution_policies(self, tenant_id: str | None = None) -> list[ExecutionPolicy]:
+        with self.database.connect() as connection:
+            if tenant_id:
+                rows = connection.execute(
+                    "SELECT * FROM execution_policies WHERE tenant_id = ? ORDER BY created_at DESC, id",
+                    (tenant_id,),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT * FROM execution_policies ORDER BY created_at DESC, id"
+                ).fetchall()
+        return [
+            ExecutionPolicy(
+                id=row["id"],
+                tenant_id=row["tenant_id"],
+                name=row["name"],
+                strategy=ExecutionStrategy(row["strategy"]),
+                timeout_ms=int(row["timeout_ms"]),
+                max_concurrency=int(row["max_concurrency"]),
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+    def save_model_group(self, group: ModelGroup) -> None:
+        with self.database.connect() as connection:
+            connection.execute(
+                """INSERT INTO model_groups(
+                   id, tenant_id, name, policy_id, description, status, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET tenant_id=excluded.tenant_id,
+                     name=excluded.name, policy_id=excluded.policy_id,
+                     description=excluded.description, status=excluded.status""",
+                (
+                    group.id,
+                    group.tenant_id,
+                    group.name,
+                    group.policy_id,
+                    group.description,
+                    group.status,
+                    group.created_at or _utcnow(),
+                ),
+            )
+
+    def get_model_group(self, group_id: str) -> ModelGroup | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM model_groups WHERE id = ?",
+                (group_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return ModelGroup(
+            id=row["id"],
+            tenant_id=row["tenant_id"],
+            name=row["name"],
+            policy_id=row["policy_id"],
+            description=row["description"],
+            status=row["status"],
+            created_at=row["created_at"],
+        )
+
+    def list_model_groups(self, tenant_id: str | None = None) -> list[ModelGroup]:
+        with self.database.connect() as connection:
+            if tenant_id:
+                rows = connection.execute(
+                    "SELECT * FROM model_groups WHERE tenant_id = ? ORDER BY created_at DESC, id",
+                    (tenant_id,),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT * FROM model_groups ORDER BY created_at DESC, id"
+                ).fetchall()
+        return [
+            ModelGroup(
+                id=row["id"],
+                tenant_id=row["tenant_id"],
+                name=row["name"],
+                policy_id=row["policy_id"],
+                description=row["description"],
+                status=row["status"],
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+    def delete_model_group(self, group_id: str) -> bool:
+        with self.database.connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM model_groups WHERE id = ?",
+                (group_id,),
+            )
+        return cursor.rowcount > 0
+
+    def replace_model_group_members(
+        self,
+        group_id: str,
+        members: list[ModelGroupMember],
+    ) -> None:
+        with self.database.connect() as connection:
+            connection.execute(
+                "DELETE FROM model_group_members WHERE group_id = ?",
+                (group_id,),
+            )
+            for member in sorted(members, key=lambda item: (item.position, item.route_id)):
+                connection.execute(
+                    """INSERT INTO model_group_members(
+                       group_id, route_id, position, enabled)
+                       VALUES (?, ?, ?, ?)""",
+                    (
+                        member.group_id,
+                        member.route_id,
+                        member.position,
+                        int(member.enabled),
+                    ),
+                )
+
+    def list_model_group_members(self, group_id: str) -> list[ModelGroupMember]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """SELECT * FROM model_group_members
+                   WHERE group_id = ? ORDER BY position, route_id""",
+                (group_id,),
+            ).fetchall()
+        return [
+            ModelGroupMember(
+                group_id=row["group_id"],
+                route_id=row["route_id"],
+                position=int(row["position"]),
+                enabled=bool(row["enabled"]),
+            )
+            for row in rows
+        ]
+
+    def save_model_run(self, run: ModelRun) -> None:
+        with self.database.connect() as connection:
+            connection.execute(
+                """INSERT INTO model_runs(
+                   id, tenant_id, app_id, group_id, strategy, status,
+                   request_json, results_json, error_message, started_at, completed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET status=excluded.status,
+                     results_json=excluded.results_json,
+                     error_message=excluded.error_message,
+                     completed_at=excluded.completed_at""",
+                (
+                    run.id,
+                    run.tenant_id,
+                    run.app_id,
+                    run.group_id,
+                    run.strategy.value,
+                    run.status,
+                    run.request_json,
+                    run.results_json,
+                    run.error_message,
+                    run.started_at or _utcnow(),
+                    run.completed_at,
+                ),
+            )
+
+    def get_model_run(self, run_id: str) -> ModelRun | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM model_runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_model_run(row)
+
+    def list_model_runs(
+        self,
+        group_id: str | None = None,
+        limit: int = 50,
+    ) -> list[ModelRun]:
+        limit = max(1, min(int(limit), 200))
+        with self.database.connect() as connection:
+            if group_id:
+                rows = connection.execute(
+                    """SELECT * FROM model_runs WHERE group_id = ?
+                       ORDER BY started_at DESC, id DESC LIMIT ?""",
+                    (group_id, limit),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """SELECT * FROM model_runs
+                       ORDER BY started_at DESC, id DESC LIMIT ?""",
+                    (limit,),
+                ).fetchall()
+        return [self._row_to_model_run(row) for row in rows]
+
+    @staticmethod
+    def _row_to_model_run(row) -> ModelRun:
+        return ModelRun(
+            id=row["id"],
+            tenant_id=row["tenant_id"],
+            app_id=row["app_id"],
+            group_id=row["group_id"],
+            strategy=ExecutionStrategy(row["strategy"]),
+            status=row["status"],
+            request_json=row["request_json"],
+            results_json=row["results_json"],
+            error_message=row["error_message"],
+            started_at=row["started_at"],
+            completed_at=row["completed_at"],
+        )
