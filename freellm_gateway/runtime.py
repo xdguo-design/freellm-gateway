@@ -22,4 +22,4 @@ def adapter_for_route(route, provider, secrets):
     if not api_key:
         return None
     endpoint = route.endpoint or provider.base_url.rstrip("/") + "/chat/completions"
-    return OpenAICompatibleAdapter(endpoint, api_key)
+    return OpenAICompatibleAdapter(endpoint, api_key, provider_id=provider.id)

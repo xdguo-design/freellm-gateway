@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import replace
 
 from .adapters.base import ProviderError
+from .contracts import ChatRequest, ChatResponse
 from .health import HealthState, ProbeResult, RoutePolicy, effective_status, is_eligible, record_probe
 from .models import ModelRoute
 from .routing import select_candidates
@@ -87,7 +88,7 @@ class ModelGateway:
             raise error
         started = time.monotonic()
         try:
-            result = await adapter.complete({
+            result = await self._complete_chat(adapter, {
                 "model": route.remote_model,
                 "messages": [{"role": "user", "content": build_probe_prompt()}],
                 "max_tokens": 64,
@@ -120,7 +121,11 @@ class ModelGateway:
             request["model"] = route.remote_model
             started = time.monotonic()
             try:
-                response = await adapter.complete(request)
+                response = (
+                    await self._complete_chat(adapter, request)
+                    if capability in {"chat", "vision", "long_context"}
+                    else await adapter.complete(request)
+                )
                 self._record_success(route, (time.monotonic() - started) * 1000)
                 return response
             except ProviderError as error:
@@ -195,6 +200,22 @@ class ModelGateway:
                     raise
                 errors.append(error)
         raise ProviderError("all_providers_failed", 503, "; ".join(str(error) for error in errors), retriable=False)
+
+    async def _complete_chat(self, adapter, payload: dict) -> dict:
+        chat = getattr(adapter, "chat", None)
+        if chat is None:
+            return await adapter.complete(payload)
+        response = await chat(ChatRequest.from_openai_payload(payload))
+        if isinstance(response, ChatResponse):
+            return response.to_openai_dict()
+        if isinstance(response, dict):
+            return response
+        raise ProviderError(
+            "invalid_response",
+            502,
+            "provider adapter returned an invalid chat response",
+            retriable=False,
+        )
 
     def _candidates(self, requested_model: str, capability: str) -> list[ModelRoute]:
         now = time.monotonic()
