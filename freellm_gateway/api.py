@@ -277,6 +277,266 @@ def create_app(
         except ProviderError as error:
             raise HTTPException(status_code=error.status_code, detail=error.kind) from error
 
+    @app.get("/api/admin/execution-policies")
+    def admin_list_execution_policies(
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(authorization)
+        if repository is None:
+            raise HTTPException(status_code=503, detail="persistence is not configured")
+        return {
+            "data": [
+                _execution_policy_json(policy)
+                for policy in repository.list_execution_policies()
+            ]
+        }
+
+    @app.post("/api/admin/execution-policies", status_code=201)
+    def admin_create_execution_policy(
+        payload: dict,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(authorization)
+        if repository is None:
+            raise HTTPException(status_code=503, detail="persistence is not configured")
+        policy_id = str(payload.get("id") or f"policy_{token_urlsafe(8)}").strip()
+        name = str(payload.get("name") or "").strip()
+        tenant_id = str(payload.get("tenant_id") or DEFAULT_TENANT_ID).strip()
+        if not policy_id or not name:
+            raise HTTPException(status_code=422, detail="id and name must be non-empty")
+        if repository.get_execution_policy(policy_id):
+            raise HTTPException(status_code=409, detail="execution policy already exists")
+        if repository.get_tenant(tenant_id) is None:
+            raise HTTPException(status_code=422, detail="tenant not found")
+        try:
+            strategy = ExecutionStrategy(str(payload.get("strategy") or "single"))
+        except ValueError as error:
+            raise HTTPException(
+                status_code=422,
+                detail="strategy must be one of single, fallback, parallel",
+            ) from error
+        timeout_ms = payload.get("timeout_ms", 60000)
+        max_concurrency = payload.get("max_concurrency", 4)
+        if not isinstance(timeout_ms, int) or timeout_ms <= 0:
+            raise HTTPException(status_code=422, detail="timeout_ms must be a positive integer")
+        if not isinstance(max_concurrency, int) or max_concurrency <= 0:
+            raise HTTPException(status_code=422, detail="max_concurrency must be a positive integer")
+        policy = ExecutionPolicy(
+            id=policy_id,
+            tenant_id=tenant_id,
+            name=name,
+            strategy=strategy,
+            timeout_ms=timeout_ms,
+            max_concurrency=max_concurrency,
+            created_at=_utcnow(),
+        )
+        repository.save_execution_policy(policy)
+        return _execution_policy_json(policy)
+
+    @app.get("/api/admin/model-groups")
+    def admin_list_model_groups(
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(authorization)
+        if repository is None:
+            raise HTTPException(status_code=503, detail="persistence is not configured")
+        return {
+            "data": [
+                _model_group_json(
+                    group,
+                    repository.list_model_group_members(group.id),
+                )
+                for group in repository.list_model_groups()
+            ]
+        }
+
+    @app.get("/api/admin/model-groups/{group_id}")
+    def admin_get_model_group(
+        group_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(authorization)
+        if repository is None:
+            raise HTTPException(status_code=503, detail="persistence is not configured")
+        group = repository.get_model_group(group_id)
+        if group is None:
+            raise HTTPException(status_code=404, detail="model group not found")
+        policy = repository.get_execution_policy(group.policy_id)
+        return {
+            "data": {
+                **_model_group_json(
+                    group,
+                    repository.list_model_group_members(group.id),
+                ),
+                "policy": _execution_policy_json(policy) if policy else None,
+            }
+        }
+
+    @app.post("/api/admin/model-groups", status_code=201)
+    def admin_create_model_group(
+        payload: dict,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(authorization)
+        if repository is None:
+            raise HTTPException(status_code=503, detail="persistence is not configured")
+        group_id = str(payload.get("id") or f"group_{token_urlsafe(8)}").strip()
+        tenant_id = str(payload.get("tenant_id") or DEFAULT_TENANT_ID).strip()
+        name = str(payload.get("name") or "").strip()
+        policy_id = str(payload.get("policy_id") or "").strip()
+        if not group_id or not name or not policy_id:
+            raise HTTPException(status_code=422, detail="id, name and policy_id must be non-empty")
+        if repository.get_model_group(group_id):
+            raise HTTPException(status_code=409, detail="model group already exists")
+        policy = repository.get_execution_policy(policy_id)
+        if policy is None:
+            raise HTTPException(status_code=422, detail="execution policy not found")
+        if policy.tenant_id != tenant_id:
+            raise HTTPException(status_code=422, detail="group and policy must belong to the same tenant")
+        members = _parse_model_group_members(group_id, payload.get("members"), gateway)
+        status = str(payload.get("status") or "active")
+        if status not in {"active", "disabled", "archived"}:
+            raise HTTPException(status_code=422, detail="invalid model group status")
+        group = ModelGroup(
+            id=group_id,
+            tenant_id=tenant_id,
+            name=name,
+            policy_id=policy_id,
+            description=payload.get("description"),
+            status=status,
+            created_at=_utcnow(),
+        )
+        try:
+            repository.save_model_group(group)
+            repository.replace_model_group_members(group.id, members)
+        except sqlite3.IntegrityError as error:
+            raise HTTPException(status_code=422, detail="invalid model group references") from error
+        return _model_group_json(group, members)
+
+    @app.post("/api/admin/model-groups/{group_id}/members")
+    def admin_replace_model_group_members(
+        group_id: str,
+        payload: dict,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(authorization)
+        if repository is None:
+            raise HTTPException(status_code=503, detail="persistence is not configured")
+        group = repository.get_model_group(group_id)
+        if group is None:
+            raise HTTPException(status_code=404, detail="model group not found")
+        members = _parse_model_group_members(group_id, payload.get("members"), gateway)
+        repository.replace_model_group_members(group_id, members)
+        return {"data": _model_group_json(group, members)}
+
+    @app.delete("/api/admin/model-groups/{group_id}", status_code=204)
+    def admin_delete_model_group(
+        group_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(authorization)
+        if repository is None:
+            raise HTTPException(status_code=503, detail="persistence is not configured")
+        if not repository.delete_model_group(group_id):
+            raise HTTPException(status_code=404, detail="model group not found")
+
+    @app.get("/api/admin/model-runs")
+    def admin_list_model_runs(
+        group_id: str | None = None,
+        limit: int = 50,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(authorization)
+        if repository is None:
+            raise HTTPException(status_code=503, detail="persistence is not configured")
+        return {
+            "data": [
+                _model_run_json(run)
+                for run in repository.list_model_runs(group_id=group_id, limit=limit)
+            ]
+        }
+
+    @app.get("/api/admin/model-runs/{run_id}")
+    def admin_get_model_run(
+        run_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(authorization)
+        if repository is None:
+            raise HTTPException(status_code=503, detail="persistence is not configured")
+        run = repository.get_model_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="model run not found")
+        return {"data": _model_run_json(run)}
+
+    @app.post("/v1/model-groups/{group_id}/chat/completions")
+    async def model_group_chat_completions(
+        group_id: str,
+        payload: dict,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_token(authorization)
+        if repository is None:
+            raise HTTPException(status_code=503, detail="persistence is not configured")
+        if payload.get("stream"):
+            raise HTTPException(
+                status_code=422,
+                detail="streaming is not supported for multi-model execution",
+            )
+        group = repository.get_model_group(group_id)
+        if group is None:
+            raise HTTPException(status_code=404, detail="model group not found")
+        if group.status != "active":
+            raise HTTPException(status_code=409, detail="model group is not active")
+        policy = repository.get_execution_policy(group.policy_id)
+        if policy is None:
+            raise HTTPException(status_code=409, detail="model group execution policy is missing")
+        members = repository.list_model_group_members(group.id)
+        if not any(member.enabled for member in members):
+            raise HTTPException(status_code=409, detail="model group has no enabled members")
+
+        run = ModelRun(
+            id=f"run_{token_urlsafe(10)}",
+            tenant_id=group.tenant_id,
+            app_id=None,
+            group_id=group.id,
+            strategy=policy.strategy,
+            status="running",
+            request_json=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            started_at=_utcnow(),
+        )
+        repository.save_model_run(run)
+        try:
+            result = await MultiModelExecutor(gateway).execute(policy, members, payload)
+        except ValueError as error:
+            failed = replace(
+                run,
+                status="failed",
+                error_message=str(error),
+                completed_at=_utcnow(),
+            )
+            repository.save_model_run(failed)
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+        result_data = result.to_dict()
+        completed = replace(
+            run,
+            status=result.status,
+            results_json=json.dumps(
+                result_data,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            completed_at=_utcnow(),
+        )
+        repository.save_model_run(completed)
+        return {
+            "id": run.id,
+            "object": "multi_model.chat.completion",
+            "group_id": group.id,
+            **result_data,
+        }
+
     @app.post("/v1/images/generations")
     async def image_generations(payload: dict, authorization: Annotated[str | None, Header()] = None):
         require_token(authorization)
