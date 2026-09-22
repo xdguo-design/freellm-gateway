@@ -251,7 +251,6 @@ def create_app(
             adapter = OpenAICompatibleAdapter(
                 provider.base_url.rstrip("/") + "/chat/completions",
                 credential.strip(),
-                provider_id=provider.id,
             )
         elif provider.protocol == "gemini":
             adapter = GeminiNativeAdapter(
