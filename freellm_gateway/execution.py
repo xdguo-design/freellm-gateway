@@ -134,7 +134,7 @@ class MultiModelExecutor:
         request = {**payload, "model": member.route_id}
         try:
             response = await asyncio.wait_for(
-                self.gateway.complete(request),
+                self.gateway.complete_route(member.route_id, request),
                 timeout=timeout_ms / 1000,
             )
             return ModelExecutionResult(
