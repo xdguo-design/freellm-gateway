@@ -205,6 +205,68 @@ def create_app(
             },
         }
 
+    async def execute_model_group_request(group_id: str, payload: dict) -> dict:
+        if repository is None:
+            raise HTTPException(status_code=503, detail="persistence is not configured")
+        if payload.get("stream"):
+            raise HTTPException(
+                status_code=422,
+                detail="streaming is not supported for multi-model execution",
+            )
+        group = repository.get_model_group(group_id)
+        if group is None:
+            raise HTTPException(status_code=404, detail="model group not found")
+        if group.status != "active":
+            raise HTTPException(status_code=409, detail="model group is not active")
+        policy = repository.get_execution_policy(group.policy_id)
+        if policy is None:
+            raise HTTPException(status_code=409, detail="model group execution policy is missing")
+        members = repository.list_model_group_members(group.id)
+        if not any(member.enabled for member in members):
+            raise HTTPException(status_code=409, detail="model group has no enabled members")
+
+        run = ModelRun(
+            id=f"run_{token_urlsafe(10)}",
+            tenant_id=group.tenant_id,
+            app_id=None,
+            group_id=group.id,
+            strategy=policy.strategy,
+            status="running",
+            request_json=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            started_at=_utcnow(),
+        )
+        repository.save_model_run(run)
+        try:
+            result = await MultiModelExecutor(gateway).execute(policy, members, payload)
+        except ValueError as error:
+            failed = replace(
+                run,
+                status="failed",
+                error_message=str(error),
+                completed_at=_utcnow(),
+            )
+            repository.save_model_run(failed)
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+        result_data = result.to_dict()
+        completed = replace(
+            run,
+            status=result.status,
+            results_json=json.dumps(
+                result_data,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            completed_at=_utcnow(),
+        )
+        repository.save_model_run(completed)
+        return {
+            "id": run.id,
+            "object": "multi_model.chat.completion",
+            "group_id": group.id,
+            **result_data,
+        }
+
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
