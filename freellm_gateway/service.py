@@ -4,7 +4,9 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import replace
 
 from .adapters.base import ProviderError
+from .contracts import ChatChunk, ChatRequest, ChatResponse
 from .health import HealthState, ProbeResult, RoutePolicy, effective_status, is_eligible, record_probe
+from .model_registry import ModelRegistry
 from .models import ModelRoute
 from .routing import select_candidates
 
@@ -41,6 +43,7 @@ class ModelGateway:
         policies: Mapping[str, RoutePolicy] | None = None,
     ):
         self.routes = list(routes)
+        self.registry = ModelRegistry(self.routes)
         self.adapters = adapters
         self.policies = dict(policies or {})
         self.health_states = {
@@ -59,6 +62,7 @@ class ModelGateway:
         if any(existing.id == route.id for existing in self.routes):
             raise ValueError(f"route already exists: {route.id}")
         self.routes.append(route)
+        self.registry.register(route)
         self.health_states[route.id] = HealthState(status=route.health)
         if adapter is not None:
             self.adapters[route.id] = adapter
@@ -67,6 +71,7 @@ class ModelGateway:
         if not any(existing.id == route.id for existing in self.routes):
             raise KeyError(route.id)
         self.routes = [route if existing.id == route.id else existing for existing in self.routes]
+        self.registry.replace(route)
         self.health_states.setdefault(route.id, HealthState(status=route.health))
         if adapter is not None:
             self.adapters[route.id] = adapter
@@ -75,8 +80,18 @@ class ModelGateway:
         if not any(route.id == route_id for route in self.routes):
             raise KeyError(route_id)
         self.routes = [route for route in self.routes if route.id != route_id]
+        self.registry.remove(route_id)
         self.adapters.pop(route_id, None)
         self.health_states.pop(route_id, None)
+
+    def replace_routes(self, routes: Sequence[ModelRoute]) -> None:
+        previous_states = self.health_states
+        self.routes = list(routes)
+        self.registry.replace_all(self.routes)
+        self.health_states = {
+            route.id: previous_states.get(route.id, HealthState(status=route.health))
+            for route in self.routes
+        }
 
     async def probe(self, route_id: str) -> dict:
         route = self.route(route_id)
@@ -87,7 +102,7 @@ class ModelGateway:
             raise error
         started = time.monotonic()
         try:
-            result = await adapter.complete({
+            result = await self._complete_chat(adapter, {
                 "model": route.remote_model,
                 "messages": [{"role": "user", "content": build_probe_prompt()}],
                 "max_tokens": 64,
@@ -120,8 +135,54 @@ class ModelGateway:
             request["model"] = route.remote_model
             started = time.monotonic()
             try:
-                response = await adapter.complete(request)
+                response = (
+                    await self._complete_chat(adapter, request)
+                    if capability in {"chat", "vision", "long_context"}
+                    else await adapter.complete(request)
+                )
                 self._record_success(route, (time.monotonic() - started) * 1000)
+                return response
+            except ProviderError as error:
+                self._record_error(route, error)
+                errors.append(error)
+        raise ProviderError("all_providers_failed", 503, "; ".join(str(error) for error in errors), retriable=False)
+
+    async def embed(self, payload: dict) -> dict:
+        """Route OpenAI-compatible embeddings. Requires routes with capability ``embedding``."""
+        requested_model = payload.get("model", "auto")
+        candidates = self._candidates(requested_model, "embedding")
+        if not candidates:
+            # Fallback: match by remote_model name among embedding-capable routes
+            candidates = self._candidates("auto", "embedding")
+            if requested_model != "auto":
+                candidates = [
+                    r for r in candidates
+                    if r.id == requested_model or r.remote_model == requested_model
+                    or (r.display_name and r.display_name == requested_model)
+                ]
+        if not candidates:
+            raise ProviderError(
+                "no_available_model",
+                503,
+                "no eligible embedding route (add capability 'embedding' to a route)",
+                retriable=False,
+            )
+
+        errors: list[ProviderError] = []
+        for route in candidates:
+            adapter = self.adapters.get(route.id)
+            if adapter is None or not hasattr(adapter, "embed"):
+                errors.append(ProviderError("missing_adapter", 500, route.id, retriable=False))
+                continue
+            request = dict(payload)
+            request["model"] = route.remote_model
+            started = time.monotonic()
+            try:
+                response = await adapter.embed(request)
+                self._record_success(route, (time.monotonic() - started) * 1000)
+                if isinstance(response, dict):
+                    response = dict(response)
+                    response.setdefault("model", route.id)
                 return response
             except ProviderError as error:
                 self._record_error(route, error)
@@ -135,16 +196,32 @@ class ModelGateway:
         errors: list[ProviderError] = []
         for route in candidates:
             adapter = self.adapters.get(route.id)
-            if adapter is None or not hasattr(adapter, "stream"):
+            if adapter is None or (
+                not hasattr(adapter, "stream_chat") and not hasattr(adapter, "stream")
+            ):
                 errors.append(ProviderError("stream_not_supported", 501, route.id, retriable=False))
                 continue
             request = dict(payload)
             request["model"] = route.remote_model
             emitted = False
             try:
-                async for chunk in adapter.stream(request):
-                    emitted = True
-                    yield chunk
+                stream_chat = getattr(adapter, "stream_chat", None)
+                if stream_chat is not None:
+                    normalized = ChatRequest.from_openai_payload(request)
+                    async for chunk in stream_chat(normalized):
+                        if not isinstance(chunk, ChatChunk):
+                            raise ProviderError(
+                                "invalid_response",
+                                502,
+                                "provider adapter returned an invalid stream chunk",
+                                retriable=False,
+                            )
+                        emitted = True
+                        yield chunk.to_openai_sse()
+                else:
+                    async for chunk in adapter.stream(request):
+                        emitted = True
+                        yield chunk
                 self._record_success(route, 0)
                 return
             except ProviderError as error:
@@ -153,6 +230,22 @@ class ModelGateway:
                     raise
                 errors.append(error)
         raise ProviderError("all_providers_failed", 503, "; ".join(str(error) for error in errors), retriable=False)
+
+    async def _complete_chat(self, adapter, payload: dict) -> dict:
+        chat = getattr(adapter, "chat", None)
+        if chat is None:
+            return await adapter.complete(payload)
+        response = await chat(ChatRequest.from_openai_payload(payload))
+        if isinstance(response, ChatResponse):
+            return response.to_openai_dict()
+        if isinstance(response, dict):
+            return response
+        raise ProviderError(
+            "invalid_response",
+            502,
+            "provider adapter returned an invalid chat response",
+            retriable=False,
+        )
 
     def _candidates(self, requested_model: str, capability: str) -> list[ModelRoute]:
         now = time.monotonic()
@@ -193,11 +286,14 @@ class ModelGateway:
     def _sync_route_health(self, route_id: str) -> None:
         status = self.health_states[route_id].status
         self.routes = [replace(route, health=status) if route.id == route_id else route for route in self.routes]
+        self.registry.replace(self.route(route_id))
 
 
 def infer_capability(payload: dict) -> str:
     if payload.get("task") == "image_generation":
         return "image_generation"
+    if "input" in payload and "messages" not in payload and "prompt" not in payload:
+        return "embedding"
     if _contains_image(payload.get("messages", [])):
         return "vision"
     estimated_tokens = len(str(payload.get("messages", ""))) // 4

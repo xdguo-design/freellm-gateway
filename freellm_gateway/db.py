@@ -38,7 +38,143 @@ class Database:
                     public_url TEXT,
                     public_docs_url TEXT,
                     free_summary TEXT,
-                    catalog_status TEXT NOT NULL
+                    catalog_status TEXT NOT NULL,
+                    version TEXT NOT NULL DEFAULT 'v1',
+                    status TEXT NOT NULL DEFAULT 'running',
+                    context_window INTEGER,
+                    max_output_tokens INTEGER,
+                    input_price_per_million REAL,
+                    output_price_per_million REAL,
+                    pricing_currency TEXT NOT NULL DEFAULT 'USD'
+                );
+                CREATE TABLE IF NOT EXISTS tenants (
+                    id TEXT PRIMARY KEY,
+                    code TEXT NOT NULL UNIQUE,
+                    name TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'active'
+                );
+                CREATE TABLE IF NOT EXISTS applications (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    description TEXT,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS app_credentials (
+                    id TEXT PRIMARY KEY,
+                    app_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                    key_id TEXT NOT NULL UNIQUE,
+                    secret_hash TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    created_at TEXT NOT NULL,
+                    expire_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS audit_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    request_id TEXT NOT NULL,
+                    tenant_id TEXT,
+                    app_id TEXT,
+                    endpoint TEXT NOT NULL,
+                    model TEXT,
+                    route_id TEXT,
+                    status_code INTEGER NOT NULL,
+                    latency_ms INTEGER,
+                    prompt_tokens INTEGER,
+                    completion_tokens INTEGER,
+                    total_tokens INTEGER,
+                    error_kind TEXT,
+                    created_at TEXT NOT NULL,
+                    meta_json TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_audit_request_id ON audit_events(request_id);
+                CREATE INDEX IF NOT EXISTS idx_audit_created_at ON audit_events(created_at);
+                CREATE INDEX IF NOT EXISTS idx_audit_app_id ON audit_events(app_id);
+                CREATE TABLE IF NOT EXISTS usage_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    request_id TEXT NOT NULL,
+                    tenant_id TEXT,
+                    app_id TEXT,
+                    model TEXT,
+                    route_id TEXT,
+                    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                    completion_tokens INTEGER NOT NULL DEFAULT 0,
+                    total_tokens INTEGER NOT NULL DEFAULT 0,
+                    latency_ms INTEGER NOT NULL DEFAULT 0,
+                    success INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_usage_created_at ON usage_records(created_at);
+                CREATE INDEX IF NOT EXISTS idx_usage_app_id ON usage_records(app_id);
+                CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_records(model);
+                CREATE TABLE IF NOT EXISTS knowledge_bases (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    embedding_model_id TEXT,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS documents (
+                    id TEXT PRIMARY KEY,
+                    kb_id TEXT NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+                    title TEXT NOT NULL,
+                    filename TEXT,
+                    content_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    sha256 TEXT,
+                    char_count INTEGER NOT NULL DEFAULT 0,
+                    chunk_count INTEGER NOT NULL DEFAULT 0,
+                    error_message TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_documents_kb ON documents(kb_id);
+                CREATE TABLE IF NOT EXISTS chunks (
+                    id TEXT PRIMARY KEY,
+                    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                    kb_id TEXT NOT NULL,
+                    ordinal INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    token_estimate INTEGER NOT NULL DEFAULT 0,
+                    embedding_json TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_chunks_kb ON chunks(kb_id);
+                CREATE INDEX IF NOT EXISTS idx_chunks_document ON chunks(document_id);
+                CREATE TABLE IF NOT EXISTS document_blobs (
+                    document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+                    text_content TEXT NOT NULL
                 );
                 """
             )
+            self._ensure_columns(connection)
+
+    def _ensure_columns(self, connection: sqlite3.Connection) -> None:
+        cols = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(routes)").fetchall()
+        }
+        route_columns = {
+            "version": "TEXT NOT NULL DEFAULT 'v1'",
+            "status": "TEXT NOT NULL DEFAULT 'running'",
+            "context_window": "INTEGER",
+            "max_output_tokens": "INTEGER",
+            "input_price_per_million": "REAL",
+            "output_price_per_million": "REAL",
+            "pricing_currency": "TEXT NOT NULL DEFAULT 'USD'",
+        }
+        for name, ddl in route_columns.items():
+            if name not in cols:
+                connection.execute(f"ALTER TABLE routes ADD COLUMN {name} {ddl}")
+        # chunks.embedding_json for Hybrid RAG (existing DBs)
+        try:
+            chunk_cols = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(chunks)").fetchall()
+            }
+            if chunk_cols and "embedding_json" not in chunk_cols:
+                connection.execute("ALTER TABLE chunks ADD COLUMN embedding_json TEXT")
+        except Exception:
+            pass

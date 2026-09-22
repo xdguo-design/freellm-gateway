@@ -85,3 +85,51 @@ def test_chat_stream_returns_server_sent_events():
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     assert "data:" in response.text
+
+
+def test_model_capability_endpoints_expose_structured_matrix():
+    route = ModelRoute(
+        id="gemini-pro",
+        provider_id="google",
+        remote_model="gemini-pro",
+        priority=1,
+        capabilities=frozenset({"chat", "vision", "tools", "stream"}),
+        context_window=1000000,
+        max_output_tokens=8192,
+        input_price_per_million=1.25,
+        output_price_per_million=5.0,
+    )
+    client = client_for([route])
+    headers = {"Authorization": "Bearer api-token"}
+
+    detail = client.get("/v1/models/gemini-pro", headers=headers)
+    capabilities = client.get("/v1/models/gemini-pro/capabilities", headers=headers)
+
+    assert detail.status_code == 200
+    assert detail.json()["capabilities"]["matrix"]["vision"] is True
+    assert detail.json()["capabilities"]["matrix"]["function_calling"] is True
+    assert detail.json()["pricing"]["input_per_million"] == 1.25
+    assert capabilities.status_code == 200
+    assert capabilities.json()["capabilities"]["streaming"] is True
+    assert capabilities.json()["limits"]["context_window"] == 1000000
+
+
+def test_admin_capability_matrix_requires_admin_token():
+    route = ModelRoute(
+        id="route-1",
+        provider_id="p1",
+        remote_model="remote-name",
+        priority=1,
+        capabilities=frozenset({"chat"}),
+    )
+    client = client_for([route])
+
+    assert client.get("/api/admin/models/capability-matrix").status_code == 401
+    response = client.get(
+        "/api/admin/models/capability-matrix",
+        headers={"Authorization": "Bearer admin-token"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"][0]["id"] == "route-1"
+
