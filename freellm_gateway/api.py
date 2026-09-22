@@ -130,6 +130,7 @@ def create_app(
             "endpoints": {
                 "models": "/v1/models",
                 "chat_completions": "/v1/chat/completions",
+                "embeddings": "/v1/embeddings",
                 "image_generations": "/v1/images/generations",
             },
         }
@@ -229,6 +230,15 @@ def create_app(
             return StreamingResponse(gateway.stream(payload), media_type="text/event-stream")
         try:
             return await gateway.complete(payload)
+        except ProviderError as error:
+            raise HTTPException(status_code=error.status_code, detail=error.kind) from error
+
+    @app.post("/v1/embeddings")
+    async def embeddings(payload: dict, authorization: Annotated[str | None, Header()] = None):
+        require_token(authorization)
+        _require_known_model(payload.get("model", "auto"), gateway)
+        try:
+            return await gateway.embed(payload)
         except ProviderError as error:
             raise HTTPException(status_code=error.status_code, detail=error.kind) from error
 
