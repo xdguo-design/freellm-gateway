@@ -69,8 +69,10 @@ class Repository:
                 """INSERT INTO routes(
                    id, provider_id, remote_model, priority, capabilities, enabled,
                    health, display_name, credential_ref, endpoint, public_url,
-                   public_docs_url, free_summary, catalog_status, version, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   public_docs_url, free_summary, catalog_status, version, status,
+                   context_window, max_output_tokens, input_price_per_million,
+                   output_price_per_million, pricing_currency)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(id) DO UPDATE SET provider_id=excluded.provider_id,
                      remote_model=excluded.remote_model, priority=excluded.priority,
                      capabilities=excluded.capabilities, enabled=excluded.enabled,
@@ -78,11 +80,18 @@ class Repository:
                      credential_ref=excluded.credential_ref, endpoint=excluded.endpoint,
                      public_url=excluded.public_url, public_docs_url=excluded.public_docs_url,
                      free_summary=excluded.free_summary, catalog_status=excluded.catalog_status,
-                     version=excluded.version, status=excluded.status""",
+                     version=excluded.version, status=excluded.status,
+                     context_window=excluded.context_window,
+                     max_output_tokens=excluded.max_output_tokens,
+                     input_price_per_million=excluded.input_price_per_million,
+                     output_price_per_million=excluded.output_price_per_million,
+                     pricing_currency=excluded.pricing_currency""",
                 (route.id, route.provider_id, route.remote_model, route.priority,
                  json.dumps(sorted(route.capabilities)), int(route.enabled), route.health.value,
                  route.display_name, route.credential_ref, route.endpoint, route.public_url,
-                 route.public_docs_url, route.free_summary, route.catalog_status, route.version, route.status),
+                 route.public_docs_url, route.free_summary, route.catalog_status, route.version, route.status,
+                 route.context_window, route.max_output_tokens, route.input_price_per_million,
+                 route.output_price_per_million, route.pricing_currency),
             )
 
     def list_routes(self) -> list[ModelRoute]:
@@ -107,6 +116,17 @@ class Repository:
             endpoint=row["endpoint"], public_url=row["public_url"],
             public_docs_url=row["public_docs_url"], free_summary=row["free_summary"],
             catalog_status=row["catalog_status"], version=version or "v1", status=status or "running",
+            context_window=row["context_window"] if "context_window" in keys else None,
+            max_output_tokens=row["max_output_tokens"] if "max_output_tokens" in keys else None,
+            input_price_per_million=(
+                row["input_price_per_million"] if "input_price_per_million" in keys else None
+            ),
+            output_price_per_million=(
+                row["output_price_per_million"] if "output_price_per_million" in keys else None
+            ),
+            pricing_currency=(
+                (row["pricing_currency"] if "pricing_currency" in keys else None) or "USD"
+            ),
         )
 
     def save_tenant(self, tenant: Tenant) -> None:

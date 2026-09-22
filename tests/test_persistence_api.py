@@ -39,6 +39,12 @@ def test_admin_provider_and_route_changes_survive_reload(tmp_path):
         json={
             "id": "groq-llama", "provider_id": "groq", "remote_model": "llama",
             "credential": "secret", "public_url": "https://console.groq.com",
+            "capabilities": ["chat", "tools", "stream"],
+            "context_window": 131072,
+            "max_output_tokens": 8192,
+            "input_price_per_million": 0.2,
+            "output_price_per_million": 0.8,
+            "pricing_currency": "usd",
         },
     )
 
@@ -48,3 +54,10 @@ def test_admin_provider_and_route_changes_survive_reload(tmp_path):
 
     reloaded = create_app(repository=repository, secrets=secrets, api_token="api", admin_token="admin")
     assert [route.id for route in reloaded.state.gateway.routes] == ["groq-llama"]
+    loaded = reloaded.state.gateway.route("groq-llama")
+    assert loaded.context_window == 131072
+    assert loaded.max_output_tokens == 8192
+    assert loaded.input_price_per_million == 0.2
+    assert loaded.output_price_per_million == 0.8
+    assert loaded.pricing_currency == "USD"
+    assert reloaded.state.gateway.registry.profile("groq-llama").supports("function_calling")

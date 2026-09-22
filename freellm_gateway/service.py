@@ -6,6 +6,7 @@ from dataclasses import replace
 from .adapters.base import ProviderError
 from .contracts import ChatChunk, ChatRequest, ChatResponse
 from .health import HealthState, ProbeResult, RoutePolicy, effective_status, is_eligible, record_probe
+from .model_registry import ModelRegistry
 from .models import ModelRoute
 from .routing import select_candidates
 
@@ -42,6 +43,7 @@ class ModelGateway:
         policies: Mapping[str, RoutePolicy] | None = None,
     ):
         self.routes = list(routes)
+        self.registry = ModelRegistry(self.routes)
         self.adapters = adapters
         self.policies = dict(policies or {})
         self.health_states = {
@@ -60,6 +62,7 @@ class ModelGateway:
         if any(existing.id == route.id for existing in self.routes):
             raise ValueError(f"route already exists: {route.id}")
         self.routes.append(route)
+        self.registry.register(route)
         self.health_states[route.id] = HealthState(status=route.health)
         if adapter is not None:
             self.adapters[route.id] = adapter
@@ -68,6 +71,7 @@ class ModelGateway:
         if not any(existing.id == route.id for existing in self.routes):
             raise KeyError(route.id)
         self.routes = [route if existing.id == route.id else existing for existing in self.routes]
+        self.registry.replace(route)
         self.health_states.setdefault(route.id, HealthState(status=route.health))
         if adapter is not None:
             self.adapters[route.id] = adapter
@@ -76,8 +80,18 @@ class ModelGateway:
         if not any(route.id == route_id for route in self.routes):
             raise KeyError(route_id)
         self.routes = [route for route in self.routes if route.id != route_id]
+        self.registry.remove(route_id)
         self.adapters.pop(route_id, None)
         self.health_states.pop(route_id, None)
+
+    def replace_routes(self, routes: Sequence[ModelRoute]) -> None:
+        previous_states = self.health_states
+        self.routes = list(routes)
+        self.registry.replace_all(self.routes)
+        self.health_states = {
+            route.id: previous_states.get(route.id, HealthState(status=route.health))
+            for route in self.routes
+        }
 
     async def probe(self, route_id: str) -> dict:
         route = self.route(route_id)
@@ -272,6 +286,7 @@ class ModelGateway:
     def _sync_route_health(self, route_id: str) -> None:
         status = self.health_states[route_id].status
         self.routes = [replace(route, health=status) if route.id == route_id else route for route in self.routes]
+        self.registry.replace(self.route(route_id))
 
 
 def infer_capability(payload: dict) -> str:
