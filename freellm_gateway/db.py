@@ -40,7 +40,12 @@ class Database:
                     free_summary TEXT,
                     catalog_status TEXT NOT NULL,
                     version TEXT NOT NULL DEFAULT 'v1',
-                    status TEXT NOT NULL DEFAULT 'running'
+                    status TEXT NOT NULL DEFAULT 'running',
+                    context_window INTEGER,
+                    max_output_tokens INTEGER,
+                    input_price_per_million REAL,
+                    output_price_per_million REAL,
+                    pricing_currency TEXT NOT NULL DEFAULT 'USD'
                 );
                 CREATE TABLE IF NOT EXISTS tenants (
                     id TEXT PRIMARY KEY,
@@ -151,14 +156,18 @@ class Database:
             row["name"]
             for row in connection.execute("PRAGMA table_info(routes)").fetchall()
         }
-        if "version" not in cols:
-            connection.execute(
-                "ALTER TABLE routes ADD COLUMN version TEXT NOT NULL DEFAULT 'v1'"
-            )
-        if "status" not in cols:
-            connection.execute(
-                "ALTER TABLE routes ADD COLUMN status TEXT NOT NULL DEFAULT 'running'"
-            )
+        route_columns = {
+            "version": "TEXT NOT NULL DEFAULT 'v1'",
+            "status": "TEXT NOT NULL DEFAULT 'running'",
+            "context_window": "INTEGER",
+            "max_output_tokens": "INTEGER",
+            "input_price_per_million": "REAL",
+            "output_price_per_million": "REAL",
+            "pricing_currency": "TEXT NOT NULL DEFAULT 'USD'",
+        }
+        for name, ddl in route_columns.items():
+            if name not in cols:
+                connection.execute(f"ALTER TABLE routes ADD COLUMN {name} {ddl}")
         # chunks.embedding_json for Hybrid RAG (existing DBs)
         try:
             chunk_cols = {
