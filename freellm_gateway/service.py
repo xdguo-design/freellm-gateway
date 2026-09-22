@@ -128,6 +128,43 @@ class ModelGateway:
                 errors.append(error)
         raise ProviderError("all_providers_failed", 503, "; ".join(str(error) for error in errors), retriable=False)
 
+    async def complete_route(
+        self,
+        route_id: str,
+        payload: dict,
+        capability: str | None = None,
+    ) -> dict:
+        """Execute one request on one exact route without cross-route failover.
+
+        This is used by the orchestration layer so each model-group member keeps
+        its own success/error result while still reusing capability checks,
+        health state updates and provider adapters.
+        """
+        capability = capability or infer_capability(payload)
+        candidates = self._candidates(route_id, capability)
+        if not candidates:
+            raise ProviderError(
+                "route_unavailable",
+                503,
+                f"route is not eligible for capability {capability}: {route_id}",
+                retriable=False,
+            )
+        route = candidates[0]
+        adapter = self.adapters.get(route.id)
+        if adapter is None:
+            raise ProviderError("missing_adapter", 500, route.id, retriable=False)
+
+        request = dict(payload)
+        request["model"] = route.remote_model
+        started = time.monotonic()
+        try:
+            response = await adapter.complete(request)
+            self._record_success(route, (time.monotonic() - started) * 1000)
+            return response
+        except ProviderError as error:
+            self._record_error(route, error)
+            raise
+
     async def embed(self, payload: dict) -> dict:
         """Route OpenAI-compatible embeddings. Requires routes with capability ``embedding``."""
         requested_model = payload.get("model", "auto")

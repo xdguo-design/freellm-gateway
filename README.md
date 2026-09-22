@@ -18,6 +18,7 @@
 - **用量统计**：近 N 天调用量、成功率、Token、按模型聚合
 - 统一 Header：`X-Request-ID`、`X-Tenant-ID`、`X-App-ID`（可选）
 - **知识库（Phase 2）**：文档入库、分块、BM25 / Hybrid RAG 检索（本地 hashing embedding + 融合）
+- **多模型执行（Phase 3）**：Model Group + Execution Policy，支持 `single` / `fallback` / `parallel`，一次请求可保留多个模型的独立答案
 
 ## 桌面版
 
@@ -37,7 +38,8 @@ freellm-gateway serve
 |------|------|
 | Phase 1 | 租户/应用/凭证、审计、用量、管理台骨架 |
 | Phase 2 | 知识库 ingest + BM25 + Hybrid RAG（本地 embedding） |
-| 后续 | 真实 embedding 路由、算子/Prompt 编排、更完整 IAM/RBAC |
+| Phase 3 | Model Group、Execution Policy、Model Run；single / fallback / parallel 多模型执行 |
+| 后续 | consensus / review / pipeline、Evaluator、Prompt/Workflow 编排、更完整 IAM/RBAC |
 
 ## 开发
 
@@ -46,3 +48,17 @@ pytest
 ```
 
 请将敏感配置放在 `.env` 或系统环境变量，不要提交 API Key、数据库、日志和构建缓存。
+
+
+## 多模型执行（Phase 3）
+
+先创建执行策略与模型组，然后调用模型组接口。同一个 Group 中的成员是现有 `route_id`，因此 Provider 与编排层保持解耦。
+
+```text
+POST /api/admin/execution-policies
+POST /api/admin/model-groups
+POST /v1/model-groups/{group_id}/chat/completions
+GET  /api/admin/model-runs
+```
+
+`parallel` 会保留每个模型的独立响应；部分模型失败时 Run 状态为 `partial`，不会丢弃已成功的答案。
