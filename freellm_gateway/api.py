@@ -95,6 +95,14 @@ def create_app(
             "public_docs_url": route.public_docs_url,
             "free_summary": route.free_summary,
             "catalog_status": route.catalog_status,
+            "context_window": route.context_window,
+            "max_output_tokens": route.max_output_tokens,
+            "pricing": {
+                "currency": route.pricing_currency,
+                "input_per_million": route.input_price_per_million,
+                "output_per_million": route.output_price_per_million,
+            },
+            "capability_matrix": gateway.registry.profile(route.id).capability_matrix(),
             "health_detail": {
                 "consecutive_failures": state.consecutive_failures if state else 0,
                 "cooldown_until": state.cooldown_until if state else None,
@@ -153,6 +161,11 @@ def create_app(
         require_admin(authorization)
         return {"data": [route_json(route) for route in gateway.routes]}
 
+    @app.get("/api/admin/models/capability-matrix")
+    def admin_model_capability_matrix(authorization: Annotated[str | None, Header()] = None):
+        require_admin(authorization)
+        return {"data": [profile.to_dict() for profile in gateway.registry.profiles()]}
+
     @app.get("/v1/models")
     def list_models(authorization: Annotated[str | None, Header()] = None) -> dict:
         require_token(authorization)
@@ -162,12 +175,51 @@ def create_app(
                 "object": "model",
                 "owned_by": route.provider_id,
                 "display_name": route.display_name or route.remote_model,
+                "capabilities": sorted(route.capabilities),
+                "context_window": route.context_window,
+                "max_output_tokens": route.max_output_tokens,
             }
             for route in gateway.routes
             if route.enabled
         ]
         data.insert(0, {"id": "auto", "object": "model", "owned_by": "freellm-gateway"})
         return {"object": "list", "data": data}
+
+    @app.get("/v1/models/{model_id}")
+    def get_model(model_id: str, authorization: Annotated[str | None, Header()] = None) -> dict:
+        require_token(authorization)
+        try:
+            route = gateway.registry.get(model_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="model route not found") from error
+        if not route.enabled:
+            raise HTTPException(status_code=404, detail="model route not found")
+        data = gateway.registry.profile(model_id).to_dict()
+        data["object"] = "model"
+        return data
+
+    @app.get("/v1/models/{model_id}/capabilities")
+    def get_model_capabilities(
+        model_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> dict:
+        require_token(authorization)
+        try:
+            profile = gateway.registry.profile(model_id)
+            route = gateway.registry.get(model_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="model route not found") from error
+        if not route.enabled:
+            raise HTTPException(status_code=404, detail="model route not found")
+        return {
+            "id": model_id,
+            "capabilities": profile.capability_matrix(),
+            "declared": sorted(profile.declared_capabilities),
+            "limits": {
+                "context_window": profile.context_window,
+                "max_output_tokens": profile.max_output_tokens,
+            },
+        }
 
     @app.post("/v1/chat/completions")
     async def chat_completions(payload: dict, authorization: Annotated[str | None, Header()] = None):
@@ -294,6 +346,14 @@ def create_app(
             if not isinstance(capabilities, list) or not capabilities or any(not isinstance(item, str) for item in capabilities):
                 raise HTTPException(status_code=422, detail="capabilities must be a non-empty string list")
             updates["capabilities"] = frozenset(capabilities)
+        for field in ("context_window", "max_output_tokens"):
+            if field in payload:
+                updates[field] = _optional_positive_int(payload, field)
+        for field in ("input_price_per_million", "output_price_per_million"):
+            if field in payload:
+                updates[field] = _optional_nonnegative_number(payload, field)
+        if "pricing_currency" in payload:
+            updates["pricing_currency"] = _pricing_currency(payload)
         provider_id = updates.get("provider_id", current.provider_id)
         if repository and not any(provider.id == provider_id for provider in repository.list_providers()):
             raise HTTPException(status_code=422, detail="provider must exist before updating a route")
@@ -431,6 +491,17 @@ def create_app(
                 "public_docs_url": item.get("public_docs_url", payload.get("public_docs_url")),
                 "free_summary": item.get("free_summary", payload.get("free_summary")),
                 "capabilities": item.get("capabilities", payload.get("capabilities", ["chat"])),
+                "context_window": item.get("context_window", payload.get("context_window")),
+                "max_output_tokens": item.get("max_output_tokens", payload.get("max_output_tokens")),
+                "input_price_per_million": item.get(
+                    "input_price_per_million", payload.get("input_price_per_million")
+                ),
+                "output_price_per_million": item.get(
+                    "output_price_per_million", payload.get("output_price_per_million")
+                ),
+                "pricing_currency": item.get(
+                    "pricing_currency", payload.get("pricing_currency", "USD")
+                ),
             }
             route = _route_from_payload(route_payload, priority=next_priority)
             route = replace(route, enabled=route_payload["enabled"])
@@ -458,7 +529,9 @@ def create_app(
         current = {route.id: route for route in gateway.routes}
         if not isinstance(ids, list) or set(ids) != set(current) or len(ids) != len(current):
             raise HTTPException(status_code=422, detail="ids must contain every route exactly once")
-        gateway.routes = [replace(current[route_id], priority=index) for index, route_id in enumerate(ids, 1)]
+        gateway.replace_routes(
+            [replace(current[route_id], priority=index) for index, route_id in enumerate(ids, 1)]
+        )
         if repository:
             for route in gateway.routes:
                 repository.save_route(route)
@@ -515,7 +588,37 @@ def _route_from_payload(payload: dict, priority: int):
         public_docs_url=payload.get("public_docs_url"),
         free_summary=payload.get("free_summary"),
         catalog_status=payload.get("catalog_status", "draft"),
+        context_window=_optional_positive_int(payload, "context_window"),
+        max_output_tokens=_optional_positive_int(payload, "max_output_tokens"),
+        input_price_per_million=_optional_nonnegative_number(payload, "input_price_per_million"),
+        output_price_per_million=_optional_nonnegative_number(payload, "output_price_per_million"),
+        pricing_currency=_pricing_currency(payload),
     )
+
+
+def _optional_positive_int(payload: dict, field: str) -> int | None:
+    value = payload.get(field)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise HTTPException(status_code=422, detail=f"{field} must be a positive integer or null")
+    return value
+
+
+def _optional_nonnegative_number(payload: dict, field: str) -> float | None:
+    value = payload.get(field)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise HTTPException(status_code=422, detail=f"{field} must be a non-negative number or null")
+    return float(value)
+
+
+def _pricing_currency(payload: dict) -> str:
+    value = payload.get("pricing_currency", "USD")
+    if not isinstance(value, str) or not value.strip() or len(value.strip()) > 8:
+        raise HTTPException(status_code=422, detail="pricing_currency must be a non-empty string up to 8 characters")
+    return value.strip().upper()
 
 
 def _provider_from_payload(payload: dict | None) -> Provider:
