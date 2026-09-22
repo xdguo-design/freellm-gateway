@@ -219,6 +219,7 @@ def create_app(
             "endpoints": {
                 "models": "/v1/models",
                 "chat_completions": "/v1/chat/completions",
+                "model_group_chat_completions": "/v1/model-groups/{group_id}/chat/completions",
                 "image_generations": "/v1/images/generations",
             },
         }
