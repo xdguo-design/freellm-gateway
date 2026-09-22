@@ -142,3 +142,54 @@ class Chunk:
     content_hash: str
     token_estimate: int = 0
     embedding_json: str | None = None  # JSON list[float]; optional for Hybrid RAG
+
+
+class ExecutionStrategy(str, Enum):
+    SINGLE = "single"
+    FALLBACK = "fallback"
+    PARALLEL = "parallel"
+
+
+@dataclass(frozen=True)
+class ExecutionPolicy:
+    id: str
+    tenant_id: str
+    name: str
+    strategy: ExecutionStrategy = ExecutionStrategy.SINGLE
+    timeout_ms: int = 60000
+    max_concurrency: int = 4
+    created_at: str | None = None
+
+
+@dataclass(frozen=True)
+class ModelGroup:
+    id: str
+    tenant_id: str
+    name: str
+    policy_id: str
+    description: str | None = None
+    status: str = "active"  # active | disabled | archived
+    created_at: str | None = None
+
+
+@dataclass(frozen=True)
+class ModelGroupMember:
+    group_id: str
+    route_id: str
+    position: int
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
+class ModelRun:
+    id: str
+    tenant_id: str
+    app_id: str | None
+    group_id: str
+    strategy: ExecutionStrategy
+    status: str  # running | succeeded | partial | failed
+    request_json: str
+    results_json: str | None = None
+    error_message: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
