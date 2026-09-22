@@ -83,6 +83,47 @@ def _model_run_json(run: ModelRun) -> dict:
     }
 
 
+def _parse_model_group_members(
+    group_id: str,
+    raw_members,
+    gateway: ModelGateway,
+) -> list[ModelGroupMember]:
+    if not isinstance(raw_members, list) or not raw_members:
+        raise HTTPException(status_code=422, detail="members must be a non-empty list")
+    known_routes = {route.id for route in gateway.routes}
+    members: list[ModelGroupMember] = []
+    seen: set[str] = set()
+    for index, item in enumerate(raw_members, 1):
+        if isinstance(item, str):
+            route_id = item.strip()
+            position = index
+            enabled = True
+        elif isinstance(item, dict):
+            route_id = str(item.get("route_id", "")).strip()
+            position = item.get("position", index)
+            enabled = item.get("enabled", True)
+        else:
+            raise HTTPException(status_code=422, detail="each member must be a route id or object")
+        if not route_id or route_id not in known_routes:
+            raise HTTPException(status_code=422, detail=f"unknown route: {route_id or '<empty>'}")
+        if route_id in seen:
+            raise HTTPException(status_code=422, detail=f"duplicate route: {route_id}")
+        if not isinstance(position, int) or position < 1:
+            raise HTTPException(status_code=422, detail="member position must be a positive integer")
+        if not isinstance(enabled, bool):
+            raise HTTPException(status_code=422, detail="member enabled must be boolean")
+        seen.add(route_id)
+        members.append(
+            ModelGroupMember(
+                group_id=group_id,
+                route_id=route_id,
+                position=position,
+                enabled=enabled,
+            )
+        )
+    return sorted(members, key=lambda member: (member.position, member.route_id))
+
+
 def create_app(
     gateway: ModelGateway | None = None,
     repository: Repository | None = None,
