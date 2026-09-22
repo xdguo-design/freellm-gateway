@@ -10,15 +10,16 @@ def load_b64(name: str) -> str:
         single = ROOT / "freellm_gateway" / f"{prefix}{name}.zlib.b64"
         if single.exists():
             return single.read_text().strip()
-    pieces = []
-    for i in range(16):
-        p = ROOT / "freellm_gateway" / f"_full_{name}.part{i}.b64"
-        if not p.exists():
-            if i == 0:
-                raise SystemExit(f"missing compressed source for {name}")
-            break
-        pieces.append(p.read_text().strip())
-    return "".join(pieces)
+    for prefix in ("_push_", "_full_"):
+        pieces = []
+        for i in range(16):
+            p = ROOT / "freellm_gateway" / f"{prefix}{name}.part{i}.b64"
+            if not p.exists():
+                break
+            pieces.append(p.read_text().strip())
+        if pieces:
+            return "".join(pieces)
+    raise SystemExit(f"missing compressed source for {name}")
 
 def expand(name: str, target: Path):
     b64 = load_b64(name)
