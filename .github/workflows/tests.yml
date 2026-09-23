@@ -22,5 +22,17 @@ jobs:
         run: python -m pip install -U pip && python -m pip install -e ".[test]"
       - name: Compile package
         run: python -m compileall -q freellm_gateway tests
+      - name: Check admin JavaScript syntax
+        run: |
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          html = Path("freellm_gateway/templates/admin.html").read_text(encoding="utf-8")
+          scripts = re.findall(r"<script>(.*?)</script>", html, re.S)
+          if not scripts:
+              raise SystemExit("admin.html contains no inline script")
+          Path("/tmp/freellm-admin.js").write_text("\n".join(scripts), encoding="utf-8")
+          PY
+          node --check /tmp/freellm-admin.js
       - name: Run test suite
         run: python -m pytest -q
