@@ -213,6 +213,8 @@ const messages: Record<Language, Record<string, string>> = {
     "status.quota_exhausted": "额度耗尽",
     "status.cooldown": "冷却中",
     "status.disabled": "已停用",
+    "status.enabled": "已启用",
+    "status.not_added": "未加入",
     "status.success": "成功",
     "status.error": "错误",
     "status.unknown": "未知",
@@ -231,6 +233,12 @@ const messages: Record<Language, Record<string, string>> = {
     "error.providerExists": "请先创建 Provider。",
     "error.discoveryUnsupported": "当前 Provider 不支持模型发现。",
     "error.catalogUnavailable": "公开目录暂时不可用。",
+    "error.baseUrl": "Base URL 必须是 HTTPS；仅 loopback 可使用 HTTP，且 URL 不能包含凭据。",
+    "error.publicUrl": "公开 URL 必须是有效 HTTPS 地址且不能包含凭据。",
+    "error.protocol": "Provider 协议必须是 OpenAI、Gemini 或 Anthropic。",
+    "error.catalogStatus": "目录状态只能是 draft 或 published。",
+    "error.routeExists": "该模型路由已存在。",
+    "error.modelsRequired": "至少需要选择一个模型。",
     "error.quotaExceeded": "{scope} 的 {resource} 配额已超限。",
     "error.generic": "操作失败：{message}"
   },
@@ -441,6 +449,8 @@ const messages: Record<Language, Record<string, string>> = {
     "status.quota_exhausted": "Quota Exhausted",
     "status.cooldown": "Cooldown",
     "status.disabled": "Disabled",
+    "status.enabled": "Enabled",
+    "status.not_added": "Not Added",
     "status.success": "Success",
     "status.error": "Error",
     "status.unknown": "Unknown",
@@ -459,6 +469,12 @@ const messages: Record<Language, Record<string, string>> = {
     "error.providerExists": "Create the Provider before adding the route.",
     "error.discoveryUnsupported": "Model discovery is not supported for this Provider.",
     "error.catalogUnavailable": "The public catalog is temporarily unavailable.",
+    "error.baseUrl": "Base URL must use HTTPS; only loopback may use HTTP, and credentials are not allowed in the URL.",
+    "error.publicUrl": "Public URLs must be valid HTTPS URLs without embedded credentials.",
+    "error.protocol": "Provider protocol must be OpenAI, Gemini or Anthropic.",
+    "error.catalogStatus": "Catalog status must be draft or published.",
+    "error.routeExists": "This model route already exists.",
+    "error.modelsRequired": "Select at least one model.",
     "error.quotaExceeded": "{scope} {resource} quota has been exceeded.",
     "error.generic": "Operation failed: {message}"
   }
@@ -511,6 +527,13 @@ export function translateErrorDetail(language: Language, error: unknown): string
     ["provider must exist before", "error.providerExists"],
     ["provider model discovery is not supported", "error.discoveryUnsupported"],
     ["catalog source unavailable", "error.catalogUnavailable"],
+    ["base_url must be", "error.baseUrl"],
+    ["official_url must be", "error.publicUrl"],
+    ["must be an https url", "error.publicUrl"],
+    ["protocol must be", "error.protocol"],
+    ["catalog_status must be draft or published", "error.catalogStatus"],
+    ["route already exists", "error.routeExists"],
+    ["models must be a non-empty list", "error.modelsRequired"],
   ];
   const matched = rules.find(([needle]) => lower.includes(needle));
   if (matched) return translate(language, matched[1]);
