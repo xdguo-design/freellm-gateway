@@ -1,18 +1,36 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { api } from "../api/client";
-import { formatCosts, formatCount, quotaCost, quotaTone, quotaTokens } from "../lib/format";
-import type { QuotaPolicy, UsageGroup, UsageSummary } from "../types";
+import { useI18n } from "../i18n";
+import { formatCosts, formatCount, quotaTone } from "../lib/format";
+import type { QuotaPolicy, QuotaStatus, UsageGroup, UsageSummary } from "../types";
 
 type Filters = { tenant_id: string; application_id: string; provider_id: string; remote_model: string };
 const emptyFilters: Filters = { tenant_id: "", application_id: "", provider_id: "", remote_model: "" };
 
 function QuotaBadge({ row }: { row: UsageGroup }) {
+  const { t } = useI18n();
   const tone = quotaTone(row.quota);
-  if (tone === "none") return <span className="badge muted-badge">未配置</span>;
-  return <span className={`badge ${tone === "bad" ? "bad" : tone === "warn" ? "warn" : "ok"}`}>{tone === "bad" ? "已超额" : tone === "warn" ? "预警" : "正常"}</span>;
+  if (tone === "none") return <span className="badge muted-badge">{t("common.unconfigured")}</span>;
+  return <span className={`badge ${tone === "bad" ? "bad" : tone === "warn" ? "warn" : "ok"}`}>{tone === "bad" ? t("common.exceeded") : tone === "warn" ? t("common.warning") : t("common.normal")}</span>;
+}
+
+function quotaTokens(quota: QuotaStatus | null | undefined, t: ReturnType<typeof useI18n>["t"]): string {
+  if (!quota) return t("common.unconfigured");
+  const remaining = quota.remaining_tokens == null ? t("common.unlimited") : formatCount(quota.remaining_tokens);
+  return `${formatCount(quota.used_tokens)} / ${remaining}`;
+}
+
+function quotaCost(quota: QuotaStatus | null | undefined, t: ReturnType<typeof useI18n>["t"]): string {
+  if (!quota) return t("common.unconfigured");
+  const remaining = quota.remaining_cost == null
+    ? t("common.unlimited")
+    : `${quota.currency} ${quota.remaining_cost.toLocaleString(undefined, { maximumFractionDigits: 6 })}`;
+  const suffix = quota.cost_complete ? "" : ` · ${t("usage.costIncomplete")}`;
+  return `${quota.currency} ${quota.used_cost.toLocaleString(undefined, { maximumFractionDigits: 6 })} / ${remaining}${suffix}`;
 }
 
 export function UsagePage() {
+  const { t, errorText } = useI18n();
   const [days, setDays] = useState(7);
   const [filters, setFilters] = useState<Filters>(emptyFilters);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
@@ -39,9 +57,9 @@ export function UsagePage() {
       setQuotas(quotaResult.data);
       setError("");
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(errorText(reason));
     }
-  }, [days, filters]);
+  }, [days, filters, errorText]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -68,19 +86,24 @@ export function UsagePage() {
   async function saveQuota(event: FormEvent) {
     event.preventDefault();
     if (!quotaDraft.scope_id) return;
-    await api(`/api/admin/quotas/${quotaDraft.scope_type}/${encodeURIComponent(quotaDraft.scope_id)}`, {
-      method: "PUT",
-      body: {
-        token_limit: quotaDraft.token_limit === "" ? null : Number(quotaDraft.token_limit),
-        cost_limit: quotaDraft.cost_limit === "" ? null : Number(quotaDraft.cost_limit),
-        currency: quotaDraft.currency.trim().toUpperCase() || "USD",
-        warning_threshold_percent: Number(quotaDraft.warning_threshold_percent || 80),
-      },
-    });
-    await load();
+    try {
+      await api(`/api/admin/quotas/${quotaDraft.scope_type}/${encodeURIComponent(quotaDraft.scope_id)}`, {
+        method: "PUT",
+        body: {
+          token_limit: quotaDraft.token_limit === "" ? null : Number(quotaDraft.token_limit),
+          cost_limit: quotaDraft.cost_limit === "" ? null : Number(quotaDraft.cost_limit),
+          currency: quotaDraft.currency.trim().toUpperCase() || "USD",
+          warning_threshold_percent: Number(quotaDraft.warning_threshold_percent || 80),
+        },
+      });
+      setError("");
+      await load();
+    } catch (reason) {
+      setError(errorText(reason));
+    }
   }
 
-  if (!usage) return <section className="card">{error ? <div className="notice bad">{error}</div> : "正在加载 Usage…"}</section>;
+  if (!usage) return <section className="card">{error ? <div className="notice bad">{error}</div> : t("usage.loading")}</section>;
 
   const apps = usage.filter_options.applications.filter((item) => !filters.tenant_id || item.tenant_id === filters.tenant_id);
   const models = usage.filter_options.models.filter((item) => !filters.provider_id || item.provider_id === filters.provider_id);
@@ -89,61 +112,62 @@ export function UsagePage() {
     <div className="stack">
       {error && <div className="notice bad">{error}</div>}
       <section className="card">
-        <div className="section-head"><div><h2>Token / Cost Usage</h2><p>筛选影响趋势和汇总；配额已用/剩余固定按 UTC 自然月。</p></div><div className="actions">{[1, 7, 30].map((value) => <button className={days === value ? "primary" : ""} key={value} onClick={() => setDays(value)}>{value === 1 ? "24h" : `${value}d`}</button>)}</div></div>
+        <div className="section-head"><div><h2>{t("usage.title")}</h2><p>{t("usage.desc")}</p></div><div className="actions">{[1, 7, 30].map((value) => <button className={days === value ? "primary" : ""} key={value} onClick={() => setDays(value)}>{value === 1 ? "24h" : `${value}d`}</button>)}</div></div>
         <div className="filter-grid">
-          <label>租户<select value={filters.tenant_id} onChange={(e) => setFilters({ ...filters, tenant_id: e.target.value, application_id: "" })}><option value="">全部租户</option>{usage.filter_options.tenants.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></label>
-          <label>应用<select value={filters.application_id} onChange={(e) => setFilters({ ...filters, application_id: e.target.value })}><option value="">全部应用</option>{apps.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></label>
-          <label>Provider<select value={filters.provider_id} onChange={(e) => setFilters({ ...filters, provider_id: e.target.value, remote_model: "" })}><option value="">全部 Provider</option>{usage.filter_options.providers.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></label>
-          <label>模型<select value={filters.remote_model} onChange={(e) => setFilters({ ...filters, remote_model: e.target.value })}><option value="">全部模型</option>{models.map((x) => <option key={x.id + x.provider_id} value={x.id}>{x.id}</option>)}</select></label>
+          <label>{t("common.tenant")}<select value={filters.tenant_id} onChange={(event) => setFilters({ ...filters, tenant_id: event.target.value, application_id: "" })}><option value="">{t("usage.allTenants")}</option>{usage.filter_options.tenants.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+          <label>{t("common.application")}<select value={filters.application_id} onChange={(event) => setFilters({ ...filters, application_id: event.target.value })}><option value="">{t("usage.allApplications")}</option>{apps.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+          <label>Provider<select value={filters.provider_id} onChange={(event) => setFilters({ ...filters, provider_id: event.target.value, remote_model: "" })}><option value="">{t("usage.allProviders")}</option>{usage.filter_options.providers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+          <label>{t("common.model")}<select value={filters.remote_model} onChange={(event) => setFilters({ ...filters, remote_model: event.target.value })}><option value="">{t("usage.allModels")}</option>{models.map((item) => <option key={item.id + item.provider_id} value={item.id}>{item.id}</option>)}</select></label>
         </div>
-        <div className="form-actions"><button onClick={() => setFilters(emptyFilters)}>清空筛选</button></div>
+        <div className="form-actions"><button onClick={() => setFilters(emptyFilters)}>{t("usage.reset")}</button></div>
       </section>
 
       <section className="stat-grid six">
-        <article className="card stat"><b>{formatCount(usage.total_tokens)}</b><span>总 Token</span></article>
-        <article className="card stat"><b>{formatCount(usage.prompt_tokens)}</b><span>输入 Token</span></article>
-        <article className="card stat"><b>{formatCount(usage.completion_tokens)}</b><span>输出 Token</span></article>
-        <article className="card stat"><b>{formatCount(usage.calls)}</b><span>调用次数</span></article>
-        <article className="card stat"><b>{formatCosts(usage.estimated_costs)}</b><span>预计费用</span></article>
-        <article className="card stat"><b>{usage.priced_calls} / {usage.calls}</b><span>已计价 / 总调用</span></article>
+        <article className="card stat"><b>{formatCount(usage.total_tokens)}</b><span>{t("usage.totalTokens")}</span></article>
+        <article className="card stat"><b>{formatCount(usage.prompt_tokens)}</b><span>{t("usage.inputTokens")}</span></article>
+        <article className="card stat"><b>{formatCount(usage.completion_tokens)}</b><span>{t("usage.outputTokens")}</span></article>
+        <article className="card stat"><b>{formatCount(usage.calls)}</b><span>{t("common.calls")}</span></article>
+        <article className="card stat"><b>{formatCosts(usage.estimated_costs)}</b><span>{t("usage.estimatedCost")}</span></article>
+        <article className="card stat"><b>{usage.priced_calls} / {usage.calls}</b><span>{t("usage.pricedCalls")}</span></article>
       </section>
 
       <section className="card">
-        <div className="section-head"><div><h2>月度配额</h2><p>请求前同时检查 Tenant 与 Application；默认 80% 预警，超限 429。</p></div></div>
+        <div className="section-head"><div><h2>{t("usage.quotaTitle")}</h2><p>{t("usage.quotaDesc")}</p></div></div>
         <form className="filter-grid quota-editor" onSubmit={saveQuota}>
-          <label>层级<select value={quotaDraft.scope_type} onChange={(e) => setQuotaDraft({ ...quotaDraft, scope_type: e.target.value as "tenant" | "application", scope_id: "" })}><option value="tenant">租户</option><option value="application">应用</option></select></label>
-          <label>目标<select value={quotaDraft.scope_id} onChange={(e) => setQuotaDraft({ ...quotaDraft, scope_id: e.target.value })}>{targets.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
-          <label>月 Token 配额<input type="number" min="0" value={quotaDraft.token_limit} onChange={(e) => setQuotaDraft({ ...quotaDraft, token_limit: e.target.value })} /></label>
-          <label>月费用预算<input type="number" min="0" step="0.000001" value={quotaDraft.cost_limit} onChange={(e) => setQuotaDraft({ ...quotaDraft, cost_limit: e.target.value })} /></label>
-          <label>币种<input maxLength={8} value={quotaDraft.currency} onChange={(e) => setQuotaDraft({ ...quotaDraft, currency: e.target.value })} /></label>
-          <label>预警阈值 %<input type="number" min="0" max="100" step="0.1" value={quotaDraft.warning_threshold_percent} onChange={(e) => setQuotaDraft({ ...quotaDraft, warning_threshold_percent: e.target.value })} /></label>
-          <div className="form-actions"><button className="primary" type="submit">保存配额</button></div>
+          <label>{t("common.scope")}<select value={quotaDraft.scope_type} onChange={(event) => setQuotaDraft({ ...quotaDraft, scope_type: event.target.value as "tenant" | "application", scope_id: "" })}><option value="tenant">{t("common.tenant")}</option><option value="application">{t("common.application")}</option></select></label>
+          <label>{t("common.target")}<select value={quotaDraft.scope_id} onChange={(event) => setQuotaDraft({ ...quotaDraft, scope_id: event.target.value })}>{targets.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+          <label>{t("usage.monthTokenQuota")}<input type="number" min="0" value={quotaDraft.token_limit} onChange={(event) => setQuotaDraft({ ...quotaDraft, token_limit: event.target.value })} /></label>
+          <label>{t("usage.monthCostBudget")}<input type="number" min="0" step="0.000001" value={quotaDraft.cost_limit} onChange={(event) => setQuotaDraft({ ...quotaDraft, cost_limit: event.target.value })} /></label>
+          <label>{t("common.currency")}<input maxLength={8} value={quotaDraft.currency} onChange={(event) => setQuotaDraft({ ...quotaDraft, currency: event.target.value })} /></label>
+          <label>{t("usage.warningThreshold")}<input type="number" min="0" max="100" step="0.1" value={quotaDraft.warning_threshold_percent} onChange={(event) => setQuotaDraft({ ...quotaDraft, warning_threshold_percent: event.target.value })} /></label>
+          <div className="form-actions"><button className="primary" type="submit">{t("usage.saveQuota")}</button></div>
         </form>
       </section>
 
       <section className="grid-two">
-        <UsageTable title="按租户" rows={usage.by_tenant} kind="tenant" />
-        <UsageTable title="按应用" rows={usage.by_application} kind="application" />
+        <UsageTable title={t("usage.byTenant")} rows={usage.by_tenant} kind="tenant" />
+        <UsageTable title={t("usage.byApplication")} rows={usage.by_application} kind="application" />
       </section>
       <section className="grid-two">
-        <UsageTable title="按 Provider" rows={usage.by_provider} kind="provider" />
-        <UsageTable title="按模型" rows={usage.by_model} kind="model" />
+        <UsageTable title={t("usage.byProvider")} rows={usage.by_provider} kind="provider" />
+        <UsageTable title={t("usage.byModel")} rows={usage.by_model} kind="model" />
       </section>
-      <UsageTable title="按天" rows={usage.by_day} kind="day" />
+      <UsageTable title={t("usage.byDay")} rows={usage.by_day} kind="day" />
     </div>
   );
 }
 
 function UsageTable({ title, rows, kind }: { title: string; rows: UsageGroup[]; kind: "tenant" | "application" | "provider" | "model" | "day" }) {
+  const { t } = useI18n();
   return (
     <section className="card">
       <div className="section-head"><div><h2>{title}</h2></div></div>
-      <div className="table-wrap"><table><thead><tr><th>维度</th><th>Token</th><th>预计费用</th>{(kind === "tenant" || kind === "application") && <><th>Token 配额</th><th>费用配额</th><th>状态</th></>}</tr></thead>
+      <div className="table-wrap"><table><thead><tr><th>{t("usage.dimension")}</th><th>Token</th><th>{t("usage.estimatedCost")}</th>{(kind === "tenant" || kind === "application") && <><th>{t("usage.tokenQuota")}</th><th>{t("usage.costQuota")}</th><th>{t("common.status")}</th></>}</tr></thead>
         <tbody>{rows.map((row, index) => {
-          const label = row.tenant_name || row.application_name || row.provider_name || row.remote_model || row.day || "unknown";
+          const label = row.tenant_name || row.application_name || row.provider_name || row.remote_model || row.day || t("common.unknown");
           const sub = row.tenant_id || row.application_id || row.provider_id || "";
-          return <tr key={`${label}-${sub}-${index}`}><td><b>{label}</b>{sub && sub !== label && <small>{sub}</small>}</td><td>{formatCount(row.total_tokens)}</td><td>{formatCosts(row.estimated_costs)}</td>{(kind === "tenant" || kind === "application") && <><td>{quotaTokens(row.quota)}</td><td>{quotaCost(row.quota)}</td><td><QuotaBadge row={row} /></td></>}</tr>;
-        })}{!rows.length && <tr><td className="empty" colSpan={6}>当前筛选范围没有数据。</td></tr>}</tbody>
+          return <tr key={`${label}-${sub}-${index}`}><td><b>{label}</b>{sub && sub !== label && <small>{sub}</small>}</td><td>{formatCount(row.total_tokens)}</td><td>{formatCosts(row.estimated_costs)}</td>{(kind === "tenant" || kind === "application") && <><td>{quotaTokens(row.quota, t)}</td><td>{quotaCost(row.quota, t)}</td><td><QuotaBadge row={row} /></td></>}</tr>;
+        })}{!rows.length && <tr><td className="empty" colSpan={6}>{t("usage.empty")}</td></tr>}</tbody>
       </table></div>
     </section>
   );
