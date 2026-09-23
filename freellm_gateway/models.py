@@ -45,8 +45,35 @@ class ModelRoute:
 
 
 @dataclass(frozen=True)
+class Tenant:
+    id: str
+    name: str
+    enabled: bool = True
+    created_at: str | None = None
+
+
+@dataclass(frozen=True)
+class Application:
+    id: str
+    tenant_id: str
+    name: str
+    key_prefix: str
+    enabled: bool = True
+    created_at: str | None = None
+
+
+@dataclass(frozen=True)
+class RequestIdentity:
+    tenant_id: str
+    application_id: str
+    auth_type: str
+
+
+@dataclass(frozen=True)
 class UsageRecord:
     request_id: str
+    tenant_id: str
+    application_id: str
     provider_id: str | None
     remote_model: str | None
     prompt_tokens: int
