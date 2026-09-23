@@ -42,6 +42,21 @@ jobs:
       - name: Build React admin
         run: npm run build --prefix web
 
+      - name: Verify Python wheel contains React admin
+        run: |
+          python -m pip wheel . --no-deps -w /tmp/freellm-wheel
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          wheel = next(Path("/tmp/freellm-wheel").glob("freellm_gateway-*.whl"))
+          with ZipFile(wheel) as archive:
+              names = set(archive.namelist())
+          assert "freellm_gateway/static/admin/index.html" in names
+          assert any(name.startswith("freellm_gateway/static/admin/assets/") and name.endswith(".js") for name in names)
+          assert any(name.startswith("freellm_gateway/static/admin/assets/") and name.endswith(".css") for name in names)
+          PY
+
       - name: Check legacy admin JavaScript syntax
         run: |
           python - <<'PY'
