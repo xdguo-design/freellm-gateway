@@ -1257,6 +1257,13 @@ def _quota_response_headers(check: dict) -> dict[str, str]:
             )
         headers["X-FreeLLM-Quota-Warning"] = ";".join(parts)
         headers["X-FreeLLM-Quota-Warning-Count"] = str(len(warnings))
+    checks = check.get("checks") or []
+    if any(
+        item.get("token_projection_complete") is False
+        or item.get("cost_projection_complete") is False
+        for item in checks
+    ):
+        headers["X-FreeLLM-Quota-Projection"] = "partial"
     period = check.get("period") or {}
     if period.get("end"):
         headers["X-FreeLLM-Quota-Period-End"] = str(period["end"])
