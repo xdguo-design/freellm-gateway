@@ -5,7 +5,7 @@ import secrets
 from datetime import datetime, timezone
 
 from .db import Database
-from .models import Application, HealthStatus, ModelRoute, Provider, Tenant, UsageRecord
+from .models import Application, HealthStatus, ModelRoute, Provider, QuotaPolicy, Tenant, UsageRecord
 
 
 _APP_KEY_PREFIX = "flm-app."
@@ -55,8 +55,9 @@ class Repository:
                 """INSERT INTO routes(
                    id, provider_id, remote_model, priority, capabilities, enabled,
                    health, display_name, credential_ref, endpoint, reasoning_effort,
-                   public_url, public_docs_url, free_summary, catalog_status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   public_url, public_docs_url, free_summary, catalog_status,
+                   input_price_per_million, output_price_per_million, pricing_currency)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(id) DO UPDATE SET provider_id=excluded.provider_id,
                      remote_model=excluded.remote_model, priority=excluded.priority,
                      capabilities=excluded.capabilities, enabled=excluded.enabled,
@@ -64,12 +65,16 @@ class Repository:
                      credential_ref=excluded.credential_ref, endpoint=excluded.endpoint,
                      reasoning_effort=excluded.reasoning_effort, public_url=excluded.public_url,
                      public_docs_url=excluded.public_docs_url,
-                     free_summary=excluded.free_summary, catalog_status=excluded.catalog_status""",
+                     free_summary=excluded.free_summary, catalog_status=excluded.catalog_status,
+                     input_price_per_million=excluded.input_price_per_million,
+                     output_price_per_million=excluded.output_price_per_million,
+                     pricing_currency=excluded.pricing_currency""",
                 (
                     route.id, route.provider_id, route.remote_model, route.priority,
                     json.dumps(sorted(route.capabilities)), int(route.enabled), route.health.value,
                     route.display_name, route.credential_ref, route.endpoint, route.reasoning_effort, route.public_url,
                     route.public_docs_url, route.free_summary, route.catalog_status,
+                    route.input_price_per_million, route.output_price_per_million, route.pricing_currency,
                 ),
             )
 
@@ -85,6 +90,9 @@ class Repository:
                 endpoint=row["endpoint"], reasoning_effort=row["reasoning_effort"], public_url=row["public_url"],
                 public_docs_url=row["public_docs_url"], free_summary=row["free_summary"],
                 catalog_status=row["catalog_status"],
+                input_price_per_million=row["input_price_per_million"],
+                output_price_per_million=row["output_price_per_million"],
+                pricing_currency=row["pricing_currency"] or "USD",
             )
             for row in rows
         ]
