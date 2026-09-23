@@ -422,19 +422,23 @@ export function ModelsPage({
       setMessage(t("models.multiNeedValidation"));
       return;
     }
-    const result = await api<{ data: { created: Route[]; skipped: unknown[]; failed: unknown[] } }>("/api/admin/routes/bulk-connections", {
-      method: "POST",
-      body: {
-        connections: ready.map((item) => ({
-          provider: providerPayload(item.provider),
-          credential: item.credential.trim(),
-          models: item.selected_models.map((remote_model) => ({ remote_model })),
-        })),
-      },
-    });
-    setMessage(t("models.multiDone", { created: result.data.created.length, skipped: result.data.skipped.length, failed: result.data.failed.length }));
-    setMultiConnections([]);
-    await onRefresh();
+    try {
+      const result = await api<{ data: { created: Route[]; skipped: unknown[]; failed: unknown[] } }>("/api/admin/routes/bulk-connections", {
+        method: "POST",
+        body: {
+          connections: ready.map((item) => ({
+            provider: providerPayload(item.provider),
+            credential: item.credential.trim(),
+            models: item.selected_models.map((remote_model) => ({ remote_model })),
+          })),
+        },
+      });
+      setMessage(t("models.multiDone", { created: result.data.created.length, skipped: result.data.skipped.length, failed: result.data.failed.length }));
+      setMultiConnections([]);
+      await onRefresh();
+    } catch (error) {
+      setMessage(errorText(error));
+    }
   }
 
   return (
@@ -533,7 +537,7 @@ export function ModelsPage({
 
       <section className="card">
         <div className="section-head"><div><h2>{t("models.logTitle")}</h2><p>{t("models.logDesc")}</p></div></div>
-        <div className="table-wrap"><table><thead><tr><th>{t("models.request")}</th><th>{t("models.route")}</th><th>Tenant / App</th><th>{t("common.result")}</th><th>{t("common.latency")}</th><th>Token</th></tr></thead><tbody>
+        <div className="table-wrap"><table><thead><tr><th>{t("models.request")}</th><th>{t("models.route")}</th><th>{t("overview.tenantApp")}</th><th>{t("common.result")}</th><th>{t("common.latency")}</th><th>Token</th></tr></thead><tbody>
           {connections.map((entry, index) => <tr key={entry.request_id ?? index}><td><code>{entry.request_id ?? "—"}</code><small>{entry.requested_model ?? ""}</small></td><td>{entry.provider_id ?? "—"}<small>{entry.remote_model ?? ""}</small></td><td>{entry.tenant_id ?? "system"}<small>{entry.application_id ?? "legacy-global"}</small></td><td><span className={`badge ${entry.status === "success" ? "ok" : "bad"}`}>{status(entry.status)}</span></td><td>{entry.elapsed_ms == null ? "—" : `${entry.elapsed_ms} ms`}</td><td>{formatCount(entry.usage?.total_tokens)}</td></tr>)}
           {!connections.length && <tr><td colSpan={6} className="empty">{t("models.noLogs")}</td></tr>}
         </tbody></table></div>
