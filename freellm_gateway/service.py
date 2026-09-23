@@ -469,6 +469,7 @@ class ModelGateway:
             "capability": capability,
             "stream": stream,
             "attempt": attempt,
+            "route_id": route.id if route else None,
             "provider_id": route.provider_id if route else None,
             "remote_model": route.remote_model if route else None,
             "status": status,
