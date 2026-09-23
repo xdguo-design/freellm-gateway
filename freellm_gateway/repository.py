@@ -572,6 +572,56 @@ class Repository:
             }
             for row in by_day
         ]
+        if not provider_id and not remote_model:
+            tenant_names = {
+                item["id"]: item["name"]
+                for item in filter_options.get("tenants", [])
+            }
+            application_options = {
+                item["id"]: item
+                for item in filter_options.get("applications", [])
+            }
+            tenant_ids = {row["tenant_id"] for row in tenant_rows}
+            for scope_id, quota in quota_status["tenant"].items():
+                if scope_id in tenant_ids:
+                    continue
+                if tenant_id and scope_id != tenant_id:
+                    continue
+                tenant_rows.append({
+                    "tenant_id": scope_id,
+                    "tenant_name": tenant_names.get(scope_id, scope_id),
+                    "calls": 0,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    **self._empty_cost_summary(),
+                    "quota": quota,
+                })
+            application_ids = {row["application_id"] for row in application_rows}
+            for scope_id, quota in quota_status["application"].items():
+                if scope_id in application_ids:
+                    continue
+                option = application_options.get(scope_id, {})
+                if application_id and scope_id != application_id:
+                    continue
+                if tenant_id and option.get("tenant_id") != tenant_id:
+                    continue
+                application_rows.append({
+                    "application_id": scope_id,
+                    "application_name": option.get("name", scope_id),
+                    "tenant_id": option.get("tenant_id", "unknown"),
+                    "calls": 0,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    **self._empty_cost_summary(),
+                    "quota": quota,
+                })
+            tenant_rows.sort(key=lambda row: (-row["total_tokens"], row["tenant_id"]))
+            application_rows.sort(
+                key=lambda row: (-row["total_tokens"], row["application_id"])
+            )
+
         selected_quota = None
         if application_id:
             selected_quota = quota_status["application"].get(application_id)
