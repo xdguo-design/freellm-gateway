@@ -11,3 +11,7 @@ logs/
 dist/
 build/
 *.egg-info/
+
+# React/TypeScript admin console
+web/node_modules/
+freellm_gateway/static/admin/
