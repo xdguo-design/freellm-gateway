@@ -304,8 +304,178 @@ class Repository:
             row["token_limit"],
             row["cost_limit_micros"],
             row["currency"],
+            float(row["warning_threshold_percent"]),
             row["updated_at"],
         )
+
+    def reserve_quota(
+        self,
+        tenant_id: str,
+        application_id: str,
+        *,
+        projected_tokens: int = 0,
+        projected_costs: dict[str, int] | None = None,
+        cost_projection_complete: bool = False,
+    ) -> dict:
+        projected_tokens = max(0, int(projected_tokens))
+        projected_costs = {
+            str(currency).upper(): max(0, int(micros))
+            for currency, micros in (projected_costs or {}).items()
+        }
+        with self._quota_lock:
+            with self.database.connect() as connection:
+                statuses = self._quota_statuses(connection)
+
+            scopes = [
+                ("tenant", tenant_id, statuses["tenant"].get(tenant_id)),
+                ("application", application_id, statuses["application"].get(application_id)),
+            ]
+            warnings = []
+            checks = []
+            violation = None
+
+            for scope_type, scope_id, status in scopes:
+                if status is None:
+                    continue
+                pending_tokens, pending_costs = self._pending_quota_usage(scope_type, scope_id)
+                used_tokens = int(status["used_tokens"]) + pending_tokens
+                token_limit = status["token_limit"]
+                token_after = used_tokens + projected_tokens
+                threshold = float(status["warning_threshold_percent"])
+
+                if token_limit is not None:
+                    token_limit = int(token_limit)
+                    token_percent = 100.0 if token_limit == 0 else token_after * 100 / token_limit
+                    if used_tokens >= token_limit or token_after > token_limit:
+                        violation = {
+                            "code": "quota_exceeded",
+                            "scope_type": scope_type,
+                            "scope_id": scope_id,
+                            "resource": "tokens",
+                            "used": used_tokens,
+                            "projected": projected_tokens,
+                            "limit": token_limit,
+                            "remaining": max(0, token_limit - used_tokens),
+                            "period_end": statuses["period"]["end"],
+                        }
+                    elif token_percent >= threshold:
+                        warnings.append({
+                            "scope_type": scope_type,
+                            "scope_id": scope_id,
+                            "resource": "tokens",
+                            "utilization_percent": round(token_percent, 2),
+                            "threshold_percent": threshold,
+                            "remaining_after_request": max(0, token_limit - token_after),
+                        })
+
+                currency = status["currency"]
+                used_cost = int(status["used_cost_micros"]) + pending_costs.get(currency, 0)
+                cost_limit = status["cost_limit_micros"]
+                projected_cost = projected_costs.get(currency)
+                cost_after = used_cost + (projected_cost or 0)
+                if cost_limit is not None:
+                    cost_limit = int(cost_limit)
+                    if used_cost >= cost_limit or (
+                        cost_projection_complete
+                        and projected_cost is not None
+                        and cost_after > cost_limit
+                    ):
+                        candidate = {
+                            "code": "quota_exceeded",
+                            "scope_type": scope_type,
+                            "scope_id": scope_id,
+                            "resource": "cost",
+                            "currency": currency,
+                            "used_micros": used_cost,
+                            "projected_micros": projected_cost,
+                            "limit_micros": cost_limit,
+                            "remaining_micros": max(0, cost_limit - used_cost),
+                            "period_end": statuses["period"]["end"],
+                            "projection_complete": cost_projection_complete,
+                        }
+                        if violation is None:
+                            violation = candidate
+                    elif cost_projection_complete and projected_cost is not None:
+                        cost_percent = 100.0 if cost_limit == 0 else cost_after * 100 / cost_limit
+                        if cost_percent >= threshold:
+                            warnings.append({
+                                "scope_type": scope_type,
+                                "scope_id": scope_id,
+                                "resource": "cost",
+                                "currency": currency,
+                                "utilization_percent": round(cost_percent, 2),
+                                "threshold_percent": threshold,
+                                "remaining_after_request_micros": max(0, cost_limit - cost_after),
+                            })
+                    elif not cost_projection_complete:
+                        warnings.append({
+                            "scope_type": scope_type,
+                            "scope_id": scope_id,
+                            "resource": "cost_projection",
+                            "currency": currency,
+                            "utilization_percent": status["cost_utilization_percent"],
+                            "threshold_percent": threshold,
+                            "projection_complete": False,
+                        })
+
+                checks.append({
+                    "scope_type": scope_type,
+                    "scope_id": scope_id,
+                    "warning_threshold_percent": threshold,
+                    "projected_tokens": projected_tokens,
+                    "projected_costs": projected_costs,
+                    "cost_projection_complete": cost_projection_complete,
+                })
+
+            if violation is not None:
+                return {
+                    "allowed": False,
+                    "reservation_id": None,
+                    "violation": violation,
+                    "warnings": warnings,
+                    "checks": checks,
+                    "period": statuses["period"],
+                }
+
+            reservation_id = None
+            if checks:
+                reservation_id = secrets.token_hex(12)
+                self._quota_reservations[reservation_id] = {
+                    "tenant_id": tenant_id,
+                    "application_id": application_id,
+                    "projected_tokens": projected_tokens,
+                    "projected_costs": projected_costs,
+                }
+            return {
+                "allowed": True,
+                "reservation_id": reservation_id,
+                "violation": None,
+                "warnings": warnings,
+                "checks": checks,
+                "period": statuses["period"],
+            }
+
+    def release_quota_reservation(self, reservation_id: str | None) -> None:
+        if not reservation_id:
+            return
+        with self._quota_lock:
+            self._quota_reservations.pop(reservation_id, None)
+
+    def _pending_quota_usage(self, scope_type: str, scope_id: str) -> tuple[int, dict[str, int]]:
+        tokens = 0
+        costs: dict[str, int] = {}
+        for reservation in self._quota_reservations.values():
+            matches = (
+                reservation["tenant_id"] == scope_id
+                if scope_type == "tenant"
+                else reservation["application_id"] == scope_id
+            )
+            if not matches:
+                continue
+            tokens += int(reservation["projected_tokens"])
+            for currency, micros in reservation["projected_costs"].items():
+                costs[currency] = costs.get(currency, 0) + int(micros)
+        return tokens, costs
 
     def save_usage_record(self, record: UsageRecord) -> None:
         with self.database.connect() as connection:
