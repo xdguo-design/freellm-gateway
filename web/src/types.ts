@@ -205,6 +205,12 @@ export interface CatalogOffer {
   validitySummary?: string;
   accessSummary?: string;
   badges?: string[];
-  pool_status?: string;
+  pool_status?: {
+    state: "enabled" | "disabled" | "not_added" | string;
+    exact: boolean;
+    route_id: string | null;
+    enabled_count: number;
+    disabled_count: number;
+  };
   [key: string]: unknown;
 }
