@@ -482,7 +482,7 @@ export function ModelsPage({
 
       <section className="grid-two model-editor-grid">
         <form className="card form-card" onSubmit={saveRoute}>
-          <div className="section-head"><div><h2>{editing ? t("models.editTitle") : t("models.addBulkTitle")}</h2><p>{t("models.editorDesc")}</p></div><button type="button" onClick={() => { setDraft((current) => ({ ...current, provider_id: CUSTOM_PROVIDER_ID })); setCustomProvider(atomGitPreset()); }}>{t("models.atomgitPreset")}</button></div>
+          <div className="section-head"><div><h2>{editing ? t("models.editTitle") : t("models.addBulkTitle")}</h2><p>{t("models.editorDesc")}</p></div><button type="button" onClick={() => { setDraft((current) => ({ ...current, provider_id: CUSTOM_PROVIDER_ID })); setCustomProvider(atomGitPreset(t("models.atomgitProviderName"))); }}>{t("models.atomgitPreset")}</button></div>
           <div className="form-grid">
             <label>Provider<select required value={draft.provider_id} onChange={(event) => {
               const providerId = event.target.value;
@@ -516,7 +516,7 @@ export function ModelsPage({
         <form className="card form-card" onSubmit={saveProvider}>
           <div className="section-head"><div><h2>{t("models.providerAddTitle")}</h2><p>{t("models.providerAddDesc")}</p></div></div>
           <ProviderFields value={providerDraft} onChange={setProviderDraft} prefix="provider-form" />
-          <div className="form-actions"><button type="button" onClick={() => setProviderDraft(atomGitPreset())}>{t("models.atomgitPreset")}</button><button className="primary" type="submit">{t("models.saveProvider")}</button></div>
+          <div className="form-actions"><button type="button" onClick={() => setProviderDraft(atomGitPreset(t("models.atomgitProviderName")))}>{t("models.atomgitPreset")}</button><button className="primary" type="submit">{t("models.saveProvider")}</button></div>
         </form>
       </section>
 
