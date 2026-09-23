@@ -9,20 +9,40 @@ on:
   pull_request:
 
 jobs:
-  pytest:
+  test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install test dependencies
+
+      - name: Install Python test dependencies
         run: python -m pip install -U pip && python -m pip install -e ".[test]"
-      - name: Compile package
+
+      - name: Compile Python
         run: python -m compileall -q freellm_gateway tests
-      - name: Check admin JavaScript syntax
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install web dependencies
+        run: npm install --prefix web --no-audit --no-fund
+
+      - name: Typecheck React TypeScript
+        run: npm run typecheck --prefix web
+
+      - name: Test React TypeScript
+        run: npm run test --prefix web
+
+      - name: Build React admin
+        run: npm run build --prefix web
+
+      - name: Check legacy admin JavaScript syntax
         run: |
           python - <<'PY'
           import re
@@ -31,8 +51,9 @@ jobs:
           scripts = re.findall(r"<script>(.*?)</script>", html, re.S)
           if not scripts:
               raise SystemExit("admin.html contains no inline script")
-          Path("/tmp/freellm-admin.js").write_text("\n".join(scripts), encoding="utf-8")
+          Path("/tmp/freellm-admin-legacy.js").write_text("\n".join(scripts), encoding="utf-8")
           PY
-          node --check /tmp/freellm-admin.js
-      - name: Run test suite
+          node --check /tmp/freellm-admin-legacy.js
+
+      - name: Run Python test suite
         run: python -m pytest -q
