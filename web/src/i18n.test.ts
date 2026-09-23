@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { statusLabel, translate, translateErrorDetail } from "./i18n";
+import { messages, statusLabel, translate, translateErrorDetail } from "./i18n";
 
 describe("i18n", () => {
+  it("keeps Chinese and English dictionaries in exact key parity", () => {
+    expect(Object.keys(messages.zh).sort()).toEqual(Object.keys(messages.en).sort());
+  });
+
   it("translates navigation and interpolates values", () => {
     expect(translate("zh", "nav.models")).toBe("模型池");
     expect(translate("en", "nav.models")).toBe("Model Pool");
