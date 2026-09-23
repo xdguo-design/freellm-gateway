@@ -25,7 +25,7 @@ from .adapters.openai import OpenAICompatibleAdapter
 from .catalog import export_catalog, sync_catalog_to_site
 from .connection_log import ConnectionLogger
 from .discovery import discover_new_routes
-from .models import Provider, RequestIdentity, SUPPORTED_PROVIDER_PROTOCOLS
+from .models import Provider, RequestIdentity, SUPPORTED_CATALOG_STATUSES, SUPPORTED_PROVIDER_PROTOCOLS
 from .repository import Repository
 from .runtime import build_gateway
 from .runtime import adapter_for_route
@@ -666,6 +666,8 @@ def create_app(
                 value = payload[field]
                 if value is not None and not isinstance(value, str):
                     raise HTTPException(status_code=422, detail=f"{field} must be a string or null")
+                if field == "catalog_status" and value not in SUPPORTED_CATALOG_STATUSES:
+                    raise HTTPException(status_code=422, detail="catalog_status must be draft or published")
                 updates[field] = value
         if "reasoning_effort" in payload:
             value = payload["reasoning_effort"]
@@ -1064,7 +1066,7 @@ def _route_from_payload(payload: dict, priority: int):
         public_url=payload.get("public_url"),
         public_docs_url=payload.get("public_docs_url"),
         free_summary=payload.get("free_summary"),
-        catalog_status=payload.get("catalog_status", "draft"),
+        catalog_status=_catalog_status(payload.get("catalog_status", "draft")),
         input_price_per_million=_optional_nonnegative_number(
             payload.get("input_price_per_million"),
             "input_price_per_million",
@@ -1075,6 +1077,12 @@ def _route_from_payload(payload: dict, priority: int):
         ),
         pricing_currency=_pricing_currency(payload.get("pricing_currency", "USD")),
     )
+
+
+def _catalog_status(value: object) -> str:
+    if not isinstance(value, str) or value not in SUPPORTED_CATALOG_STATUSES:
+        raise HTTPException(status_code=422, detail="catalog_status must be draft or published")
+    return value
 
 
 def _normalize_reasoning_effort(value: object) -> str | None:
