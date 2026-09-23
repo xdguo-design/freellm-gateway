@@ -60,7 +60,7 @@ export function CatalogPage() {
             <article className="catalog-card" key={String(offer.id ?? index)}>
               <div className="section-head">
                 <div><h3>{String(offer.name ?? offer.model ?? offer.id ?? "Model")}</h3><p>{String(offer.provider ?? "")}</p></div>
-                <span className="badge muted-badge">{status(String(offer.pool_status ?? "catalog"))}</span>
+                <span className={`badge ${offer.pool_status?.state === "enabled" ? "ok" : "muted-badge"}`}>{status(offer.pool_status?.state ?? "catalog")}</span>
               </div>
               <p>{String(offer.freeSummary ?? "")}</p>
               <div>{offer.capabilities?.map((cap) => <span className="tag" key={cap}>{cap}</span>)}</div>
