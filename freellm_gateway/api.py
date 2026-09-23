@@ -829,6 +829,7 @@ def create_app(
                 "public_url": item.get("public_url", payload.get("public_url")),
                 "public_docs_url": item.get("public_docs_url", payload.get("public_docs_url")),
                 "free_summary": item.get("free_summary", payload.get("free_summary")),
+                "catalog_status": item.get("catalog_status", payload.get("catalog_status", "draft")),
                 "capabilities": item.get("capabilities", payload.get("capabilities", ["chat"])),
                 "reasoning_effort": item.get("reasoning_effort", payload.get("reasoning_effort")),
                 "input_price_per_million": item.get(
@@ -920,6 +921,7 @@ def create_app(
                     "public_url": connection.get("public_url"),
                     "public_docs_url": connection.get("public_docs_url"),
                     "free_summary": connection.get("free_summary"),
+                    "catalog_status": connection.get("catalog_status", "draft"),
                     "capabilities": connection.get("capabilities", ["chat"]),
                 }
                 _validate_connection_metadata(common)
@@ -938,6 +940,7 @@ def create_app(
                         "public_url": item.get("public_url", common["public_url"]),
                         "public_docs_url": item.get("public_docs_url", common["public_docs_url"]),
                         "free_summary": item.get("free_summary", common["free_summary"]),
+                        "catalog_status": item.get("catalog_status", common["catalog_status"]),
                         "capabilities": item.get("capabilities", common["capabilities"]),
                         "reasoning_effort": item.get("reasoning_effort", connection.get("reasoning_effort")),
                         "input_price_per_million": item.get(
@@ -1132,7 +1135,7 @@ def _validate_connection_models(models: object) -> list[dict]:
 
 
 def _validate_connection_metadata(metadata: dict) -> None:
-    for field in ("display_name", "public_url", "public_docs_url", "free_summary"):
+    for field in ("display_name", "public_url", "public_docs_url", "free_summary", "catalog_status"):
         value = metadata.get(field)
         if value is not None and not isinstance(value, str):
             raise HTTPException(status_code=422, detail=f"{field} must be a string or null")
