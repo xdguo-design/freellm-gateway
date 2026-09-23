@@ -379,6 +379,11 @@ def create_app(
                     "completion_tokens": 0,
                     "total_tokens": 0,
                     "avg_latency_ms": 0.0,
+                    "priced_calls": 0,
+                    "unpriced_calls": 0,
+                    "estimated_costs": [],
+                    "quota_period": None,
+                    "selected_quota": None,
                     "by_tenant": [],
                     "by_application": [],
                     "by_provider": [],
@@ -740,6 +745,15 @@ def create_app(
                 "free_summary": item.get("free_summary", payload.get("free_summary")),
                 "capabilities": item.get("capabilities", payload.get("capabilities", ["chat"])),
                 "reasoning_effort": item.get("reasoning_effort", payload.get("reasoning_effort")),
+                "input_price_per_million": item.get(
+                    "input_price_per_million", payload.get("input_price_per_million")
+                ),
+                "output_price_per_million": item.get(
+                    "output_price_per_million", payload.get("output_price_per_million")
+                ),
+                "pricing_currency": item.get(
+                    "pricing_currency", payload.get("pricing_currency", "USD")
+                ),
             }
             route = _route_from_payload(route_payload, priority=next_priority)
             route = replace(route, enabled=route_payload["enabled"])
@@ -840,6 +854,15 @@ def create_app(
                         "free_summary": item.get("free_summary", common["free_summary"]),
                         "capabilities": item.get("capabilities", common["capabilities"]),
                         "reasoning_effort": item.get("reasoning_effort", connection.get("reasoning_effort")),
+                        "input_price_per_million": item.get(
+                            "input_price_per_million", connection.get("input_price_per_million")
+                        ),
+                        "output_price_per_million": item.get(
+                            "output_price_per_million", connection.get("output_price_per_million")
+                        ),
+                        "pricing_currency": item.get(
+                            "pricing_currency", connection.get("pricing_currency", "USD")
+                        ),
                     }
                     route = _route_from_payload(route_payload, priority=next_priority)
                     route = replace(route, enabled=route_payload["enabled"])
