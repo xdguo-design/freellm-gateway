@@ -9,7 +9,8 @@ class ConnectionLogger:
 
     _SAFE_FIELDS = frozenset({
         "request_id", "requested_model", "capability", "stream", "attempt",
-        "provider_id", "remote_model", "status", "elapsed_ms", "usage", "error_kind",
+        "tenant_id", "application_id", "provider_id", "remote_model",
+        "status", "elapsed_ms", "usage", "error_kind",
     })
 
     def __init__(self, path: str | Path):
