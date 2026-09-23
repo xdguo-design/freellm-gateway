@@ -67,6 +67,7 @@ class Database:
                     token_limit INTEGER,
                     cost_limit_micros INTEGER,
                     currency TEXT NOT NULL DEFAULT 'USD',
+                    warning_threshold_percent REAL NOT NULL DEFAULT 80,
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY(scope_type, scope_id)
                 );
@@ -103,6 +104,12 @@ class Database:
             for name, ddl in route_additions.items():
                 if name not in route_columns:
                     connection.execute(f"ALTER TABLE routes ADD COLUMN {name} {ddl}")
+
+            quota_columns = {row["name"] for row in connection.execute("PRAGMA table_info(quota_policies)")}
+            if "warning_threshold_percent" not in quota_columns:
+                connection.execute(
+                    "ALTER TABLE quota_policies ADD COLUMN warning_threshold_percent REAL NOT NULL DEFAULT 80"
+                )
 
             usage_columns = {row["name"] for row in connection.execute("PRAGMA table_info(usage_records)")}
             if "tenant_id" not in usage_columns:
