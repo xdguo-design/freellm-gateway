@@ -14,8 +14,8 @@ import httpx
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
 from .adapters.anthropic import AnthropicAdapter, anthropic_messages_endpoint
@@ -108,6 +108,20 @@ def create_app(
             str(app.state.logs_path.with_name("gateway-connections.jsonl")),
         )
     )
+    admin_dist_override = os.getenv("FREELLM_GATEWAY_ADMIN_DIST")
+    app.state.admin_dist = (
+        Path(admin_dist_override)
+        if admin_dist_override
+        else Path(__file__).with_name("static").joinpath("admin")
+    )
+    app.state.admin_index = app.state.admin_dist.joinpath("index.html")
+    admin_assets = app.state.admin_dist.joinpath("assets")
+    if admin_assets.is_dir():
+        app.mount(
+            "/admin/assets",
+            StaticFiles(directory=admin_assets),
+            name="admin-assets",
+        )
     def persist_connection(entry: dict) -> None:
         app.state.connection_log.append(entry)
         if repository is not None:
@@ -196,13 +210,33 @@ def create_app(
             },
         }
 
-    @app.get("/admin", response_class=HTMLResponse)
-    def admin_page():
-        # The browser must be able to load the shell before JavaScript can
-        # prompt for the admin token. The data and mutation endpoints below
-        # remain protected by require_admin.
+    def legacy_admin_html() -> HTMLResponse:
         template = Path(__file__).with_name("templates").joinpath("admin.html")
         return HTMLResponse(template.read_text(encoding="utf-8"))
+
+    @app.get("/admin/legacy", response_class=HTMLResponse)
+    def legacy_admin_page():
+        return legacy_admin_html()
+
+    @app.get("/admin")
+    def admin_page():
+        # Keep Python-only development usable before the React bundle is built.
+        # Production/release builds place the Vite output in static/admin.
+        if app.state.admin_index.is_file():
+            return RedirectResponse(url="/admin/", status_code=307)
+        return legacy_admin_html()
+
+    @app.get("/admin/")
+    def admin_react_index():
+        if app.state.admin_index.is_file():
+            return FileResponse(app.state.admin_index)
+        return legacy_admin_html()
+
+    @app.get("/admin/{path:path}")
+    def admin_react_route(path: str):
+        if app.state.admin_index.is_file():
+            return FileResponse(app.state.admin_index)
+        return legacy_admin_html()
 
     @app.get("/api/admin/overview")
     def admin_overview(request: Request, authorization: Annotated[str | None, Header()] = None):
