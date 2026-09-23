@@ -7,6 +7,7 @@ import {
   connectionKey,
   type ProviderDraft,
 } from "../features/models/connection";
+import { useI18n } from "../i18n";
 import { formatCount } from "../lib/format";
 import type { ConnectionRecord, Provider, Route } from "../types";
 
@@ -83,13 +84,14 @@ function ProviderFields({
   onChange: (value: ProviderDraft) => void;
   prefix: string;
 }) {
+  const { t } = useI18n();
   return (
     <div className="provider-fields" data-testid={prefix}>
       <label>Provider ID<input required value={value.id} onChange={(event) => onChange({ ...value, id: event.target.value })} /></label>
-      <label>名称<input required value={value.name} onChange={(event) => onChange({ ...value, name: event.target.value })} /></label>
-      <label>协议<select value={value.protocol} onChange={(event) => onChange({ ...value, protocol: event.target.value })}><option value="openai">OpenAI Compatible</option><option value="gemini">Gemini Native</option><option value="anthropic">Anthropic Native</option></select></label>
+      <label>{t("common.name")}<input required value={value.name} onChange={(event) => onChange({ ...value, name: event.target.value })} /></label>
+      <label>{t("common.protocol")}<select value={value.protocol} onChange={(event) => onChange({ ...value, protocol: event.target.value })}><option value="openai">OpenAI Compatible</option><option value="gemini">Gemini Native</option><option value="anthropic">Anthropic Native</option></select></label>
       <label>Base URL<input required placeholder="https://api.example.com/v1" value={value.base_url} onChange={(event) => onChange({ ...value, base_url: event.target.value })} /></label>
-      <label>官网<input required placeholder="https://example.com" value={value.official_url} onChange={(event) => onChange({ ...value, official_url: event.target.value })} /></label>
+      <label>{t("common.officialSite")}<input required placeholder="https://example.com" value={value.official_url} onChange={(event) => onChange({ ...value, official_url: event.target.value })} /></label>
     </div>
   );
 }
@@ -105,6 +107,7 @@ export function ModelsPage({
   connections: ConnectionRecord[];
   onRefresh: () => Promise<void>;
 }) {
+  const { t, status, errorText } = useI18n();
   const [draft, setDraft] = useState<RouteDraft>(blankRoute);
   const [editing, setEditing] = useState<string | null>(null);
   const [customProvider, setCustomProvider] = useState<ProviderDraft>(blankProvider);
@@ -160,11 +163,11 @@ export function ModelsPage({
       });
       setMessage(
         catalog.has_endpoint
-          ? "已从 Catalog 预填模型与连接，请验证 API Key 后保存。"
-          : "Catalog 没有 API Endpoint：已带入模型信息，请补 Base URL 后再验证。",
+          ? t("models.catalogPrefilled")
+          : t("models.catalogNoEndpoint"),
       );
     } catch {
-      setMessage("Catalog 草稿无法解析，请手动添加模型。");
+      setMessage(t("models.catalogInvalid"));
     }
   }, [providers]);
 
@@ -222,7 +225,7 @@ export function ModelsPage({
         sameConnection = false;
       }
       if (!sameConnection) {
-        throw new Error("Provider ID 已被另一个协议/Base URL 占用，请修改自定义 Provider ID。");
+        throw new Error(t("models.providerConflict"));
       }
       return existing;
     }
@@ -232,7 +235,7 @@ export function ModelsPage({
   async function validateAndFetchModels() {
     const provider = activeProvider();
     if (!provider || !draft.credential.trim()) {
-      setMessage("请先选择/填写 Provider，并填写 API Key。");
+      setMessage(t("models.needProviderKey"));
       return;
     }
     try {
@@ -248,9 +251,9 @@ export function ModelsPage({
       setModelOptions(result.data ?? []);
       setSelectedModels(result.data ?? []);
       if (!draft.remote_model && result.data?.[0]) setDraft((current) => ({ ...current, remote_model: result.data[0] }));
-      setMessage(`连接验证成功，发现 ${result.data?.length ?? 0} 个模型。`);
+      setMessage(t("models.connectionOk", { count: result.data?.length ?? 0 }));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(errorText(error));
     }
   }
 
@@ -258,7 +261,7 @@ export function ModelsPage({
     event.preventDefault();
     const provider = activeProvider();
     if (!provider) {
-      setMessage("Provider 必填。");
+      setMessage(t("models.providerRequired"));
       return;
     }
     if (draft.provider_id === CUSTOM_PROVIDER_ID) await ensureProvider(provider);
@@ -279,14 +282,14 @@ export function ModelsPage({
     setEditing(null);
     setModelOptions([]);
     setSelectedModels([]);
-    setMessage("模型路由已保存。");
+    setMessage(t("models.routeSaved"));
     await onRefresh();
   }
 
   async function saveSelectedModels() {
     const provider = activeProvider();
     if (!provider || !selectedModels.length) {
-      setMessage("请先验证连接并选择模型。");
+      setMessage(t("models.needModels"));
       return;
     }
     const result = await api<{ data: { created: Route[]; skipped: Array<{ remote_model: string }> } }>("/api/admin/routes/bulk", {
@@ -301,7 +304,7 @@ export function ModelsPage({
         ...(draft.credential.trim() ? { credential: draft.credential.trim() } : {}),
       },
     });
-    setMessage(`批量加入完成：新增 ${result.data.created.length}，跳过 ${result.data.skipped.length}。`);
+    setMessage(t("models.bulkDone", { created: result.data.created.length, skipped: result.data.skipped.length }));
     await onRefresh();
   }
 
@@ -324,19 +327,19 @@ export function ModelsPage({
         const text = error instanceof Error ? error.message : String(error);
         rateLimitStreak = text.includes("rate_limit") ? rateLimitStreak + 1 : 0;
         if (rateLimitStreak >= 3) {
-          setMessage(`连续 3 个 Provider 返回 rate limit，已停止批量探测；完成 ${checked} 个。`);
+          setMessage(t("models.probeRateLimited", { count: checked }));
           await onRefresh();
           return;
         }
       }
     }
-    setMessage(`批量探测完成：${checked} 个路由。`);
+    setMessage(t("models.probeDone", { count: checked }));
     await onRefresh();
   }
 
   async function discover(providerId: string) {
     const result = await api<{ data: Route[] }>(`/api/admin/providers/${encodeURIComponent(providerId)}/discover`, { method: "POST" });
-    setMessage(`Provider 自动发现新增 ${result.data.length} 个模型。`);
+    setMessage(t("models.discoverDone", { count: result.data.length }));
     await onRefresh();
   }
 
@@ -353,7 +356,7 @@ export function ModelsPage({
     event.preventDefault();
     await api("/api/admin/providers", { method: "POST", body: providerPayload(providerDraft) });
     setProviderDraft(blankProvider());
-    setMessage("Provider 已保存。");
+    setMessage(t("models.providerSaved"));
     await onRefresh();
   }
 
@@ -389,14 +392,14 @@ export function ModelsPage({
         error: "",
       });
     } catch (error) {
-      updateMulti(item.key, { status: "error", error: error instanceof Error ? error.message : String(error) });
+      updateMulti(item.key, { status: "error", error: errorText(error) });
     }
   }
 
   async function saveMultiConnections() {
     const ready = multiConnections.filter((item) => item.status === "validated" && item.selected_models.length);
     if (!ready.length || ready.length !== multiConnections.length) {
-      setMessage("每个连接都必须先验证，并至少选择一个模型。");
+      setMessage(t("models.multiNeedValidation"));
       return;
     }
     const result = await api<{ data: { created: Route[]; skipped: unknown[]; failed: unknown[] } }>("/api/admin/routes/bulk-connections", {
@@ -409,7 +412,7 @@ export function ModelsPage({
         })),
       },
     });
-    setMessage(`多连接导入完成：新增 ${result.data.created.length}，跳过 ${result.data.skipped.length}，失败 ${result.data.failed.length}。`);
+    setMessage(t("models.multiDone", { created: result.data.created.length, skipped: result.data.skipped.length, failed: result.data.failed.length }));
     setMultiConnections([]);
     await onRefresh();
   }
@@ -420,25 +423,25 @@ export function ModelsPage({
 
       <section className="card">
         <div className="section-head">
-          <div><h2>模型池</h2><p>Provider、连接、能力、优先级、价格和健康状态在一个页面管理。</p></div>
-          <div className="actions"><button onClick={() => void probeAll()}>全部探测</button><button className="primary" onClick={() => { setEditing(null); setDraft(blankRoute()); }}>添加模型</button></div>
+          <div><h2>{t("models.title")}</h2><p>{t("models.desc")}</p></div>
+          <div className="actions"><button onClick={() => void probeAll()}>{t("models.probeAll")}</button><button className="primary" onClick={() => { setEditing(null); setDraft(blankRoute()); }}>{t("models.add")}</button></div>
         </div>
-        <div className="table-wrap"><table><thead><tr><th>#</th><th>模型</th><th>Provider</th><th>能力</th><th>价格 / 1M</th><th>运行状态</th><th>目录状态</th><th>操作</th></tr></thead>
+        <div className="table-wrap"><table><thead><tr><th>#</th><th>{t("common.model")}</th><th>Provider</th><th>{t("common.capability")}</th><th>{t("common.pricePerMillion")}</th><th>{t("common.runtimeStatus")}</th><th>{t("common.catalogStatus")}</th><th>{t("common.actions")}</th></tr></thead>
           <tbody>{ordered.map((route, index) => <tr key={route.id}>
             <td>{route.priority}</td>
             <td><b>{route.display_name || route.remote_model}</b><small>{route.remote_model}</small></td>
             <td>{route.provider_name}</td>
             <td>{route.capabilities.map((cap) => <span className="tag" key={cap}>{cap}</span>)}</td>
             <td>{route.pricing.input_per_million == null && route.pricing.output_per_million == null ? "—" : `${route.pricing.currency} ${route.pricing.input_per_million ?? "?"} / ${route.pricing.output_per_million ?? "?"}`}</td>
-            <td><span className={`badge ${!route.enabled ? "muted-badge" : route.health === "healthy" ? "ok" : "warn"}`}>{route.enabled ? route.health : "disabled"}</span></td>
-            <td><span className={`badge ${route.catalog_status === "published" ? "ok" : "muted-badge"}`}>{route.catalog_status}</span></td>
+            <td><span className={`badge ${!route.enabled ? "muted-badge" : route.health === "healthy" ? "ok" : "warn"}`}>{status(route.enabled ? route.health : "disabled")}</span></td>
+            <td><span className={`badge ${route.catalog_status === "published" ? "ok" : "muted-badge"}`}>{status(route.catalog_status)}</span></td>
             <td><div className="actions">
               <button onClick={() => void move(index, -1)}>↑</button><button onClick={() => void move(index, 1)}>↓</button>
-              <button onClick={() => edit(route)}>编辑</button><button onClick={() => void mutate(route, "probe")}>探测</button>
-              <button onClick={() => void mutate(route, "toggle")}>{route.enabled ? "停用" : "启用"}</button>
-              <button className="danger" onClick={() => void mutate(route, "delete")}>删除</button>
+              <button onClick={() => edit(route)}>{t("common.edit")}</button><button onClick={() => void mutate(route, "probe")}>{t("common.probe")}</button>
+              <button onClick={() => void mutate(route, "toggle")}>{route.enabled ? t("common.disable") : t("common.enable")}</button>
+              <button className="danger" onClick={() => void mutate(route, "delete")}>{t("common.delete")}</button>
             </div></td>
-          </tr>)}{!ordered.length && <tr><td colSpan={8} className="empty">还没有模型路由。</td></tr>}</tbody>
+          </tr>)}{!ordered.length && <tr><td colSpan={8} className="empty">{t("models.empty")}</td></tr>}</tbody>
         </table></div>
       </section>
 
@@ -446,73 +449,73 @@ export function ModelsPage({
         {providers.map((provider) => {
           const providerRoutes = routesByProvider.get(provider.id) ?? [];
           return <article className="card provider-card" key={provider.id}>
-            <div className="section-head"><div><h3>{provider.name}</h3><p>{provider.protocol} · <code>{provider.base_url}</code></p></div><span className="badge muted-badge">{providerRoutes.length} models</span></div>
-            <div className="provider-models">{providerRoutes.map((route) => <div key={route.id}><b>{route.remote_model}</b><span className={`badge ${route.enabled && route.health === "healthy" ? "ok" : "muted-badge"}`}>{route.enabled ? route.health : "disabled"}</span></div>)}</div>
-            <div className="actions"><button onClick={() => void discover(provider.id)}>发现新模型</button><a href={provider.official_url} target="_blank" rel="noreferrer">官网 ↗</a></div>
+            <div className="section-head"><div><h3>{provider.name}</h3><p>{provider.protocol} · <code>{provider.base_url}</code></p></div><span className="badge muted-badge">{t("models.modelsCount", { count: providerRoutes.length })}</span></div>
+            <div className="provider-models">{providerRoutes.map((route) => <div key={route.id}><b>{route.remote_model}</b><span className={`badge ${route.enabled && route.health === "healthy" ? "ok" : "muted-badge"}`}>{status(route.enabled ? route.health : "disabled")}</span></div>)}</div>
+            <div className="actions"><button onClick={() => void discover(provider.id)}>{t("models.discover")}</button><a href={provider.official_url} target="_blank" rel="noreferrer">{t("common.officialSite")} ↗</a></div>
           </article>;
         })}
       </section>
 
       <section className="grid-two model-editor-grid">
         <form className="card form-card" onSubmit={saveRoute}>
-          <div className="section-head"><div><h2>{editing ? "编辑模型" : "添加模型 / 批量模型"}</h2><p>自定义 Provider 可在保存前用临时 API Key 验证，不会把 Key 回显到页面。</p></div><button type="button" onClick={() => { setDraft((current) => ({ ...current, provider_id: CUSTOM_PROVIDER_ID })); setCustomProvider(atomGitPreset()); }}>AtomGit 本机预设</button></div>
+          <div className="section-head"><div><h2>{editing ? t("models.editTitle") : t("models.addBulkTitle")}</h2><p>{t("models.editorDesc")}</p></div><button type="button" onClick={() => { setDraft((current) => ({ ...current, provider_id: CUSTOM_PROVIDER_ID })); setCustomProvider(atomGitPreset()); }}>{t("models.atomgitPreset")}</button></div>
           <div className="form-grid">
             <label>Provider<select required value={draft.provider_id} onChange={(event) => {
               const providerId = event.target.value;
               const provider = providers.find((item) => item.id === providerId);
               const groqPreset = provider?.name.trim().toLowerCase() === "groq" && !draft.remote_model.trim();
               setDraft({ ...draft, provider_id: providerId, remote_model: groqPreset ? "openai/gpt-oss-120b" : draft.remote_model });
-            }}><option value="">请选择</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.protocol}</option>)}<option value={CUSTOM_PROVIDER_ID}>＋ 自定义 Provider</option></select></label>
-            <label>模型<input list="provider-model-options" required value={draft.remote_model} onChange={(event) => setDraft({ ...draft, remote_model: event.target.value })} /><datalist id="provider-model-options">{modelOptions.map((model) => <option value={model} key={model} />)}</datalist></label>
-            <label>显示名<input value={draft.display_name} onChange={(event) => setDraft({ ...draft, display_name: event.target.value })} /></label>
-            <label>优先级<input type="number" min={1} value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: Number(event.target.value) })} /></label>
-            <label>能力（逗号分隔）<input value={draft.capabilities} onChange={(event) => setDraft({ ...draft, capabilities: event.target.value })} /></label>
+            }}><option value="">{t("common.select")}</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.protocol}</option>)}<option value={CUSTOM_PROVIDER_ID}>{t("models.customProvider")}</option></select></label>
+            <label>{t("common.model")}<input list="provider-model-options" required value={draft.remote_model} onChange={(event) => setDraft({ ...draft, remote_model: event.target.value })} /><datalist id="provider-model-options">{modelOptions.map((model) => <option value={model} key={model} />)}</datalist></label>
+            <label>{t("models.displayName")}<input value={draft.display_name} onChange={(event) => setDraft({ ...draft, display_name: event.target.value })} /></label>
+            <label>{t("models.priority")}<input type="number" min={1} value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: Number(event.target.value) })} /></label>
+            <label>{t("models.capabilitiesCsv")}<input value={draft.capabilities} onChange={(event) => setDraft({ ...draft, capabilities: event.target.value })} /></label>
             <label>Reasoning Effort<input placeholder="medium / high / low" value={draft.reasoning_effort} onChange={(event) => setDraft({ ...draft, reasoning_effort: event.target.value })} /></label>
-            <label>输入价 / 1M<input type="number" min="0" step="0.000001" value={draft.input_price_per_million} onChange={(event) => setDraft({ ...draft, input_price_per_million: event.target.value })} /></label>
-            <label>输出价 / 1M<input type="number" min="0" step="0.000001" value={draft.output_price_per_million} onChange={(event) => setDraft({ ...draft, output_price_per_million: event.target.value })} /></label>
-            <label>币种<input value={draft.pricing_currency} maxLength={8} onChange={(event) => setDraft({ ...draft, pricing_currency: event.target.value })} /></label>
-            <label>API Key（仅验证/保存本次）<input type="password" value={draft.credential} onChange={(event) => setDraft({ ...draft, credential: event.target.value })} /></label>
-            <label>公开注册 URL<input value={draft.public_url} onChange={(event) => setDraft({ ...draft, public_url: event.target.value })} /></label>
-            <label>公开文档 URL<input value={draft.public_docs_url} onChange={(event) => setDraft({ ...draft, public_docs_url: event.target.value })} /></label>
-            <label>目录状态<select value={draft.catalog_status} onChange={(event) => setDraft({ ...draft, catalog_status: event.target.value as "draft" | "published" })}><option value="draft">draft · 进入 review</option><option value="published">published · 可导出公开</option></select></label>
-            <label className="full">免费说明<input value={draft.free_summary} onChange={(event) => setDraft({ ...draft, free_summary: event.target.value })} /></label>
+            <label>{t("models.inputPrice")}<input type="number" min="0" step="0.000001" value={draft.input_price_per_million} onChange={(event) => setDraft({ ...draft, input_price_per_million: event.target.value })} /></label>
+            <label>{t("models.outputPrice")}<input type="number" min="0" step="0.000001" value={draft.output_price_per_million} onChange={(event) => setDraft({ ...draft, output_price_per_million: event.target.value })} /></label>
+            <label>{t("common.currency")}<input value={draft.pricing_currency} maxLength={8} onChange={(event) => setDraft({ ...draft, pricing_currency: event.target.value })} /></label>
+            <label>{t("models.apiKeyOnce")}<input type="password" value={draft.credential} onChange={(event) => setDraft({ ...draft, credential: event.target.value })} /></label>
+            <label>{t("models.publicRegister")}<input value={draft.public_url} onChange={(event) => setDraft({ ...draft, public_url: event.target.value })} /></label>
+            <label>{t("models.publicDocs")}<input value={draft.public_docs_url} onChange={(event) => setDraft({ ...draft, public_docs_url: event.target.value })} /></label>
+            <label>{t("common.catalogStatus")}<select value={draft.catalog_status} onChange={(event) => setDraft({ ...draft, catalog_status: event.target.value as "draft" | "published" })}><option value="draft">{t("models.catalogDraft")}</option><option value="published">{t("models.catalogPublished")}</option></select></label>
+            <label className="full">{t("models.freeSummary")}<input value={draft.free_summary} onChange={(event) => setDraft({ ...draft, free_summary: event.target.value })} /></label>
           </div>
           {draft.provider_id === CUSTOM_PROVIDER_ID && <ProviderFields value={customProvider} onChange={setCustomProvider} prefix="custom-provider" />}
-          <div className="form-actions"><button type="button" onClick={() => void validateAndFetchModels()}>验证连接并获取模型</button><button className="primary" type="submit">保存当前模型</button></div>
+          <div className="form-actions"><button type="button" onClick={() => void validateAndFetchModels()}>{t("models.validateFetch")}</button><button className="primary" type="submit">{t("models.saveCurrent")}</button></div>
           {!!modelOptions.length && <div className="bulk-picker-react">
-            <div className="section-head"><div><h3>批量模型</h3><p>验证返回的模型可以一次加入模型池。</p></div><div className="actions"><button type="button" onClick={() => setSelectedModels(modelOptions)}>全选</button><button type="button" onClick={() => setSelectedModels([])}>全不选</button></div></div>
+            <div className="section-head"><div><h3>{t("models.bulkTitle")}</h3><p>{t("models.bulkDesc")}</p></div><div className="actions"><button type="button" onClick={() => setSelectedModels(modelOptions)}>{t("models.selectAll")}</button><button type="button" onClick={() => setSelectedModels([])}>{t("models.selectNone")}</button></div></div>
             <div className="check-grid">{modelOptions.map((model) => <label key={model}><input type="checkbox" checked={selectedModels.includes(model)} onChange={(event) => setSelectedModels((current) => event.target.checked ? [...current, model] : current.filter((item) => item !== model))} />{model}</label>)}</div>
-            <div className="form-actions"><button className="primary" type="button" onClick={() => void saveSelectedModels()}>保存选中模型（{selectedModels.length}）</button></div>
+            <div className="form-actions"><button className="primary" type="button" onClick={() => void saveSelectedModels()}>{t("models.saveSelected", { count: selectedModels.length })}</button></div>
           </div>}
         </form>
 
         <form className="card form-card" onSubmit={saveProvider}>
-          <div className="section-head"><div><h2>添加 Provider</h2><p>同一个 Provider 名称可以有多个连接；连接身份由协议 + Base URL 区分。</p></div></div>
+          <div className="section-head"><div><h2>{t("models.providerAddTitle")}</h2><p>{t("models.providerAddDesc")}</p></div></div>
           <ProviderFields value={providerDraft} onChange={setProviderDraft} prefix="provider-form" />
-          <div className="form-actions"><button type="button" onClick={() => setProviderDraft(atomGitPreset())}>AtomGit 预设</button><button className="primary" type="submit">保存 Provider</button></div>
+          <div className="form-actions"><button type="button" onClick={() => setProviderDraft(atomGitPreset())}>AtomGit 预设</button><button className="primary" type="submit">{t("models.saveProvider")}</button></div>
         </form>
       </section>
 
       <section className="card">
-        <div className="section-head"><div><h2>多 Provider 批量连接</h2><p>每个连接独立验证 API Key、选择模型，最后一次提交；失败连接不会污染其他连接。</p></div><div className="actions"><button onClick={() => addMultiConnection()}>＋ 自定义连接</button>{providers.slice(0, 4).map((provider) => <button key={provider.id} onClick={() => addMultiConnection(provider)}>＋ {provider.name}</button>)}</div></div>
+        <div className="section-head"><div><h2>{t("models.multiTitle")}</h2><p>{t("models.multiDesc")}</p></div><div className="actions"><button onClick={() => addMultiConnection()}>{t("models.addCustomConnection")}</button>{providers.slice(0, 4).map((provider) => <button key={provider.id} onClick={() => addMultiConnection(provider)}>＋ {provider.name}</button>)}</div></div>
         <div className="multi-grid">
           {multiConnections.map((item) => <article className="connection-card" key={item.key}>
-            <div className="section-head"><div><h3>{item.provider.name || "新连接"}</h3><p>{item.status === "validated" ? `已验证 · ${item.models.length} models` : item.status === "validating" ? "验证中…" : item.error || "待验证"}</p></div><button className="danger" onClick={() => setMultiConnections((current) => current.filter((candidate) => candidate.key !== item.key))}>移除</button></div>
+            <div className="section-head"><div><h3>{item.provider.name || t("models.newConnection")}</h3><p>{item.status === "validated" ? t("models.validatedModels", { count: item.models.length }) : item.status === "validating" ? t("models.validating") : item.error || t("models.pendingValidation")}</p></div><button className="danger" onClick={() => setMultiConnections((current) => current.filter((candidate) => candidate.key !== item.key))}>{t("models.remove")}</button></div>
             <ProviderFields value={item.provider} onChange={(provider) => updateMulti(item.key, { provider, status: "idle", models: [], selected_models: [] })} prefix={`multi-${item.key}`} />
             <label>API Key<input type="password" value={item.credential} onChange={(event) => updateMulti(item.key, { credential: event.target.value, status: "idle" })} /></label>
             <div className="form-actions"><button disabled={!item.credential || item.status === "validating"} onClick={() => void validateMulti(item)}>验证并获取模型</button></div>
             {!!item.models.length && <div className="check-grid compact">{item.models.map((model) => <label key={model}><input type="checkbox" checked={item.selected_models.includes(model)} onChange={(event) => updateMulti(item.key, { selected_models: event.target.checked ? [...item.selected_models, model] : item.selected_models.filter((value) => value !== model) })} />{model}</label>)}</div>}
           </article>)}
         </div>
-        {!multiConnections.length && <p className="empty">添加一个或多个 Provider 连接后开始验证。</p>}
-        {!!multiConnections.length && <div className="form-actions"><button className="primary" onClick={() => void saveMultiConnections()}>批量加入全部已验证连接</button></div>}
+        {!multiConnections.length && <p className="empty">{t("models.noMultiConnections")}</p>}
+        {!!multiConnections.length && <div className="form-actions"><button className="primary" onClick={() => void saveMultiConnections()}>{t("models.bulkSaveConnections")}</button></div>}
       </section>
 
       <section className="card">
-        <div className="section-head"><div><h2>连接日志</h2><p>安全日志只展示路由、结果、耗时和 Usage，不展示 Prompt / API Key。</p></div></div>
-        <div className="table-wrap"><table><thead><tr><th>请求</th><th>路由</th><th>Tenant / App</th><th>结果</th><th>耗时</th><th>Token</th></tr></thead><tbody>
-          {connections.map((entry, index) => <tr key={entry.request_id ?? index}><td><code>{entry.request_id ?? "—"}</code><small>{entry.requested_model ?? ""}</small></td><td>{entry.provider_id ?? "—"}<small>{entry.remote_model ?? ""}</small></td><td>{entry.tenant_id ?? "system"}<small>{entry.application_id ?? "legacy-global"}</small></td><td><span className={`badge ${entry.status === "success" ? "ok" : "bad"}`}>{entry.status ?? "unknown"}</span></td><td>{entry.elapsed_ms == null ? "—" : `${entry.elapsed_ms} ms`}</td><td>{formatCount(entry.usage?.total_tokens)}</td></tr>)}
-          {!connections.length && <tr><td colSpan={6} className="empty">暂无连接日志。</td></tr>}
+        <div className="section-head"><div><h2>{t("models.logTitle")}</h2><p>{t("models.logDesc")}</p></div></div>
+        <div className="table-wrap"><table><thead><tr><th>{t("models.request")}</th><th>{t("models.route")}</th><th>Tenant / App</th><th>{t("common.result")}</th><th>{t("common.latency")}</th><th>Token</th></tr></thead><tbody>
+          {connections.map((entry, index) => <tr key={entry.request_id ?? index}><td><code>{entry.request_id ?? "—"}</code><small>{entry.requested_model ?? ""}</small></td><td>{entry.provider_id ?? "—"}<small>{entry.remote_model ?? ""}</small></td><td>{entry.tenant_id ?? "system"}<small>{entry.application_id ?? "legacy-global"}</small></td><td><span className={`badge ${entry.status === "success" ? "ok" : "bad"}`}>{status(entry.status)}</span></td><td>{entry.elapsed_ms == null ? "—" : `${entry.elapsed_ms} ms`}</td><td>{formatCount(entry.usage?.total_tokens)}</td></tr>)}
+          {!connections.length && <tr><td colSpan={6} className="empty">{t("models.noLogs")}</td></tr>}
         </tbody></table></div>
       </section>
     </div>
