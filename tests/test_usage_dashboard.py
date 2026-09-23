@@ -460,6 +460,44 @@ def test_monthly_tenant_and_application_quotas_report_used_and_remaining(tmp_pat
     assert summary["selected_quota"]["scope_id"] == "tenant-q"
 
 
+def test_zero_usage_configured_quota_is_visible_in_tenant_and_application_summary(tmp_path):
+    client, repository = make_usage_client(tmp_path, UsageAdapter())
+    client.post(
+        "/api/admin/tenants",
+        headers=admin_headers(),
+        json={"id": "tenant-zero", "name": "Tenant Zero"},
+    )
+    client.post(
+        "/api/admin/applications",
+        headers=admin_headers(),
+        json={"id": "app-zero", "tenant_id": "tenant-zero", "name": "App Zero"},
+    )
+    client.put(
+        "/api/admin/quotas/tenant/tenant-zero",
+        headers=admin_headers(),
+        json={"token_limit": 1000, "cost_limit": 10, "currency": "USD"},
+    )
+    client.put(
+        "/api/admin/quotas/application/app-zero",
+        headers=admin_headers(),
+        json={"token_limit": 500, "cost_limit": 5, "currency": "USD"},
+    )
+
+    summary = repository.usage_summary(7)
+    tenant = next(row for row in summary["by_tenant"] if row["tenant_id"] == "tenant-zero")
+    application = next(
+        row for row in summary["by_application"] if row["application_id"] == "app-zero"
+    )
+
+    assert tenant["total_tokens"] == 0
+    assert tenant["quota"]["used_tokens"] == 0
+    assert tenant["quota"]["remaining_tokens"] == 1000
+    assert tenant["quota"]["remaining_cost"] == 10.0
+    assert application["total_tokens"] == 0
+    assert application["quota"]["remaining_tokens"] == 500
+    assert application["quota"]["remaining_cost"] == 5.0
+
+
 def test_quota_cost_is_incomplete_when_usage_is_unpriced(tmp_path):
     client, repository = make_usage_client(tmp_path, UsageAdapter())
     client.post(
