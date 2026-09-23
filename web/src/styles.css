@@ -36,6 +36,9 @@ h1 { margin: 0; font-size: 32px; } h2 { margin: 0; font-size: 19px; } h3 { margi
 p { color: var(--muted); }
 .top-actions, .actions, .form-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .token-field { display: grid; gap: 3px; min-width: 210px; font-size: 10px; color: var(--muted); }
+.language-switch { display: inline-flex; padding: 2px; border: 1px solid var(--line); background: #091529; border-radius: 9px; }
+.language-switch button { border: 0; background: transparent; padding: 6px 9px; color: var(--muted); }
+.language-switch button.active { background: #244d91; color: white; }
 .service, .badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 5px 8px; font-size: 11px; border: 1px solid var(--line); white-space: nowrap; }
 .ok { color: #8bf0c8; border-color: #24765d !important; background: #102c28 !important; }
 .warn { color: #ffd487; border-color: #735822 !important; background: #2a2110 !important; }
