@@ -74,8 +74,6 @@ class Database:
                     created_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_usage_created_at ON usage_records(created_at);
-                CREATE INDEX IF NOT EXISTS idx_usage_tenant ON usage_records(tenant_id);
-                CREATE INDEX IF NOT EXISTS idx_usage_application ON usage_records(application_id);
                 CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_records(remote_model);
                 CREATE INDEX IF NOT EXISTS idx_usage_provider ON usage_records(provider_id);
                 """
