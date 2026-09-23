@@ -705,6 +705,142 @@ def test_warning_threshold_is_returned_in_success_headers(tmp_path):
     assert quota_status["token_warning"] is True
 
 
+def test_persisted_usage_is_used_by_next_request_preflight(tmp_path):
+    adapter = CountingUsageAdapter()
+    client, _ = make_usage_client(tmp_path, adapter)
+    client.post(
+        "/api/admin/tenants",
+        headers=admin_headers(),
+        json={"id": "tenant-history", "name": "Tenant History"},
+    )
+    key = client.post(
+        "/api/admin/applications",
+        headers=admin_headers(),
+        json={
+            "id": "app-history",
+            "tenant_id": "tenant-history",
+            "name": "App History",
+        },
+    ).json()["api_key"]
+    client.put(
+        "/api/admin/quotas/application/app-history",
+        headers=admin_headers(),
+        json={"token_limit": 100, "currency": "USD"},
+    )
+
+    first = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": "remote-model",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 1,
+        },
+    )
+    assert first.status_code == 200
+    assert adapter.complete_calls == 1
+
+    client.put(
+        "/api/admin/quotas/application/app-history",
+        headers=admin_headers(),
+        json={"token_limit": 20, "currency": "USD"},
+    )
+    second = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": "remote-model",
+            "messages": [{"role": "user", "content": "again"}],
+            "max_tokens": 1,
+        },
+    )
+
+    assert second.status_code == 429
+    assert second.json()["detail"]["used"] == 17
+    assert second.json()["detail"]["resource"] == "tokens"
+    assert adapter.complete_calls == 1
+
+
+def test_auto_model_cost_preflight_uses_most_expensive_eligible_candidate(tmp_path):
+    repository = Repository(Database(tmp_path / "gateway.sqlite3"))
+    repository.initialize()
+    repository.save_provider(
+        Provider("provider", "Provider", "openai", "https://example.test/v1", "https://example.test")
+    )
+    cheap = ModelRoute(
+        id="cheap",
+        provider_id="provider",
+        remote_model="cheap-model",
+        priority=1,
+        input_price_per_million=1.0,
+        output_price_per_million=1.0,
+        pricing_currency="USD",
+    )
+    expensive = ModelRoute(
+        id="expensive",
+        provider_id="provider",
+        remote_model="expensive-model",
+        priority=2,
+        input_price_per_million=100.0,
+        output_price_per_million=100.0,
+        pricing_currency="USD",
+    )
+    repository.save_route(cheap)
+    repository.save_route(expensive)
+    cheap_adapter = CountingUsageAdapter()
+    expensive_adapter = CountingUsageAdapter()
+    gateway = ModelGateway(
+        [cheap, expensive],
+        {"cheap": cheap_adapter, "expensive": expensive_adapter},
+    )
+    client = TestClient(
+        create_app(
+            gateway=gateway,
+            repository=repository,
+            api_token="api-token",
+            admin_token="admin-token",
+            logs_path=tmp_path / "gateway.log",
+        )
+    )
+    client.post(
+        "/api/admin/tenants",
+        headers=admin_headers(),
+        json={"id": "tenant-auto-cost", "name": "Tenant Auto Cost"},
+    )
+    key = client.post(
+        "/api/admin/applications",
+        headers=admin_headers(),
+        json={
+            "id": "app-auto-cost",
+            "tenant_id": "tenant-auto-cost",
+            "name": "App Auto Cost",
+        },
+    ).json()["api_key"]
+    client.put(
+        "/api/admin/quotas/application/app-auto-cost",
+        headers=admin_headers(),
+        json={"cost_limit": 0.0005, "currency": "USD"},
+    )
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": "auto",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 1,
+        },
+    )
+
+    assert response.status_code == 429
+    detail = response.json()["detail"]
+    assert detail["resource"] == "cost"
+    assert detail["projection_complete"] is True
+    assert detail["projected_micros"] > 500
+    assert cheap_adapter.complete_calls == 0
+    assert expensive_adapter.complete_calls == 0
+
+
 def test_pending_reservation_prevents_concurrent_quota_oversubscription(tmp_path):
     repository = Repository(Database(tmp_path / "gateway.sqlite3"))
     repository.initialize()
