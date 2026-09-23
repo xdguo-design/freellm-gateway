@@ -970,7 +970,7 @@ def test_existing_usage_database_is_migrated_with_identity_defaults(tmp_path):
 def test_admin_page_contains_usage_dimension_filters_and_summaries(tmp_path):
     client, _ = make_usage_client(tmp_path, UsageAdapter())
 
-    response = client.get("/admin")
+    response = client.get("/admin/legacy")
 
     assert response.status_code == 200
     assert 'data-view="usage"' in response.text
