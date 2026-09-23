@@ -334,6 +334,10 @@ def create_app(
         cost_limit = _optional_nonnegative_number(payload.get("cost_limit"), "cost_limit")
         cost_limit_micros = None if cost_limit is None else round(cost_limit * 1_000_000)
         currency = _pricing_currency(payload.get("currency", "USD"))
+        warning_threshold_percent = _optional_percentage(
+            payload.get("warning_threshold_percent", 80),
+            "warning_threshold_percent",
+        )
         try:
             policy = repository.save_quota_policy(
                 scope_type,
@@ -341,6 +345,7 @@ def create_app(
                 token_limit=token_limit,
                 cost_limit_micros=cost_limit_micros,
                 currency=currency,
+                warning_threshold_percent=warning_threshold_percent,
             )
         except KeyError as error:
             raise HTTPException(status_code=404, detail=f"{scope_type} not found") from error
@@ -1127,6 +1132,135 @@ def _optional_nonnegative_number(value: object, field: str) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
         raise HTTPException(status_code=422, detail=f"{field} must be a non-negative number or null")
     return float(value)
+
+
+def _optional_percentage(value: object, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise HTTPException(status_code=422, detail=f"{field} must be a number between 0 and 100")
+    normalized = float(value)
+    if normalized < 0 or normalized > 100:
+        raise HTTPException(status_code=422, detail=f"{field} must be between 0 and 100")
+    return normalized
+
+
+def _estimate_request_quota_projection(
+    payload: dict,
+    gateway: ModelGateway,
+    capability: str,
+) -> dict:
+    if capability == "image_generation":
+        return {
+            "projected_tokens": 0,
+            "projected_costs": {},
+            "cost_projection_complete": False,
+            "token_projection_complete": False,
+        }
+
+    serialized = json.dumps(
+        {key: value for key, value in payload.items() if key != "stream"},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    )
+    input_tokens = max(1, (len(serialized) + 3) // 4)
+    raw_output = payload.get("max_completion_tokens", payload.get("max_tokens"))
+    output_tokens = (
+        raw_output
+        if isinstance(raw_output, int) and not isinstance(raw_output, bool) and raw_output >= 0
+        else 0
+    )
+    output_complete = isinstance(raw_output, int) and not isinstance(raw_output, bool) and raw_output >= 0
+    projected_tokens = input_tokens + output_tokens
+    requested_model = str(payload.get("model", "auto"))
+    candidates = gateway.candidates(requested_model, capability)
+    projected_costs: dict[str, int] = {}
+    cost_complete = bool(candidates) and output_complete
+
+    for route in candidates:
+        currency = (route.pricing_currency or "USD").upper()
+        input_price = route.input_price_per_million
+        output_price = route.output_price_per_million
+        if input_price is None or (output_tokens > 0 and output_price is None):
+            cost_complete = False
+            continue
+        micros = round(
+            input_tokens * float(input_price)
+            + output_tokens * float(output_price or 0)
+        )
+        projected_costs[currency] = max(projected_costs.get(currency, 0), max(0, micros))
+
+    return {
+        "projected_tokens": projected_tokens,
+        "projected_costs": projected_costs,
+        "cost_projection_complete": cost_complete,
+        "token_projection_complete": output_complete,
+    }
+
+
+def _quota_preflight(
+    repository: Repository | None,
+    gateway: ModelGateway,
+    identity: RequestIdentity,
+    payload: dict,
+    capability: str,
+) -> dict:
+    if repository is None:
+        return {
+            "allowed": True,
+            "reservation_id": None,
+            "warnings": [],
+            "checks": [],
+            "period": None,
+        }
+    projection = _estimate_request_quota_projection(payload, gateway, capability)
+    check = repository.reserve_quota(
+        identity.tenant_id,
+        identity.application_id,
+        projected_tokens=projection["projected_tokens"],
+        projected_costs=projection["projected_costs"],
+        cost_projection_complete=projection["cost_projection_complete"],
+    )
+    for item in check.get("checks", []):
+        item["token_projection_complete"] = projection["token_projection_complete"]
+    if check.get("allowed"):
+        return check
+
+    violation = check.get("violation") or {"code": "quota_exceeded"}
+    headers = {
+        "X-FreeLLM-Quota-Scope": str(violation.get("scope_type", "")),
+        "X-FreeLLM-Quota-Resource": str(violation.get("resource", "")),
+    }
+    period_end = violation.get("period_end")
+    if isinstance(period_end, str):
+        headers["X-FreeLLM-Quota-Period-End"] = period_end
+        try:
+            end = datetime.fromisoformat(period_end)
+            now = datetime.now(timezone.utc)
+            retry_after = max(1, int((end - now).total_seconds()))
+            headers["Retry-After"] = str(retry_after)
+        except ValueError:
+            pass
+    raise HTTPException(status_code=429, detail=violation, headers=headers)
+
+
+def _quota_response_headers(check: dict) -> dict[str, str]:
+    warnings = check.get("warnings") or []
+    headers: dict[str, str] = {}
+    if warnings:
+        parts = []
+        for warning in warnings:
+            utilization = warning.get("utilization_percent")
+            utilization_text = "unknown" if utilization is None else f"{float(utilization):.2f}"
+            parts.append(
+                f"{warning.get('scope_type')}:{warning.get('scope_id')}:"
+                f"{warning.get('resource')}:{utilization_text}%"
+            )
+        headers["X-FreeLLM-Quota-Warning"] = ";".join(parts)
+        headers["X-FreeLLM-Quota-Warning-Count"] = str(len(warnings))
+    period = check.get("period") or {}
+    if period.get("end"):
+        headers["X-FreeLLM-Quota-Period-End"] = str(period["end"])
+    return headers
 
 
 def _pricing_currency(value: object) -> str:
