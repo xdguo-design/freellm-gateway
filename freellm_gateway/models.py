@@ -79,6 +79,7 @@ class QuotaPolicy:
     token_limit: int | None = None
     cost_limit_micros: int | None = None
     currency: str = "USD"
+    warning_threshold_percent: float = 80.0
     updated_at: str | None = None
 
 
