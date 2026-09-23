@@ -792,40 +792,28 @@ class Repository:
 
     @staticmethod
     def _usage_filter_options(connection, days: int) -> dict:
-        window = f"-{days} days"
         tenants = connection.execute(
-            """SELECT DISTINCT u.tenant_id AS id, COALESCE(t.name, u.tenant_id) AS name
-               FROM usage_records u
-               LEFT JOIN tenants t ON t.id = u.tenant_id
-               WHERE datetime(u.created_at) >= datetime('now', ?)
-               ORDER BY name, id""",
-            (window,),
+            """SELECT id, name
+               FROM tenants
+               WHERE enabled = 1
+               ORDER BY name, id"""
         ).fetchall()
         applications = connection.execute(
-            """SELECT DISTINCT u.application_id AS id, u.tenant_id,
-                              COALESCE(a.name, u.application_id) AS name
-               FROM usage_records u
-               LEFT JOIN applications a ON a.id = u.application_id
-               WHERE datetime(u.created_at) >= datetime('now', ?)
-               ORDER BY u.tenant_id, name, id""",
-            (window,),
+            """SELECT id, tenant_id, name
+               FROM applications
+               WHERE enabled = 1
+               ORDER BY tenant_id, name, id"""
         ).fetchall()
         providers = connection.execute(
-            """SELECT DISTINCT u.provider_id AS id, COALESCE(p.name, u.provider_id) AS name
-               FROM usage_records u
-               LEFT JOIN providers p ON p.id = u.provider_id
-               WHERE datetime(u.created_at) >= datetime('now', ?)
-                 AND u.provider_id IS NOT NULL
-               ORDER BY name, id""",
-            (window,),
+            """SELECT id, name
+               FROM providers
+               ORDER BY name, id"""
         ).fetchall()
         models = connection.execute(
-            """SELECT DISTINCT u.remote_model AS id, u.provider_id
-               FROM usage_records u
-               WHERE datetime(u.created_at) >= datetime('now', ?)
-                 AND u.remote_model IS NOT NULL
-               ORDER BY u.remote_model, u.provider_id""",
-            (window,),
+            """SELECT DISTINCT remote_model AS id, provider_id
+               FROM routes
+               WHERE enabled = 1
+               ORDER BY remote_model, provider_id"""
         ).fetchall()
         return {
             "tenants": [{"id": row["id"], "name": row["name"]} for row in tenants],
