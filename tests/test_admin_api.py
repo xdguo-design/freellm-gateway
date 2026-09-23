@@ -155,7 +155,7 @@ def test_admin_page_loads_before_admin_api_authentication():
     app = create_app(ModelGateway([], {}), api_token="api", admin_token="admin")
     client = TestClient(app)
 
-    response = client.get("/admin")
+    response = client.get("/admin/legacy")
     denied = client.get("/api/admin/routes")
 
     assert response.status_code == 200
@@ -177,7 +177,7 @@ def test_admin_api_allows_loopback_without_token_but_rejects_remote_clients():
 
 def test_admin_page_exposes_model_fetch_key_and_registration_controls():
     app = create_app(ModelGateway([], {}), api_token="api", admin_token="admin")
-    response = TestClient(app).get("/admin")
+    response = TestClient(app).get("/admin/legacy")
 
     assert response.status_code == 200
     assert 'name="credential"' in response.text
@@ -223,7 +223,7 @@ def test_admin_provider_accepts_loopback_http_but_rejects_public_http(tmp_path):
 def test_admin_page_exposes_atomgit_sidecar_preset_and_multi_connection_contract(tmp_path):
     repository = Repository(Database(tmp_path / "gateway.sqlite3"))
     app = create_app(repository=repository, api_token="api", admin_token="admin")
-    response = TestClient(app).get("/admin", headers={"Authorization": "Bearer admin"})
+    response = TestClient(app).get("/admin/legacy", headers={"Authorization": "Bearer admin"})
 
     assert response.status_code == 200
     assert "AtomGit CodingPlan" in response.text
@@ -233,7 +233,7 @@ def test_admin_page_exposes_atomgit_sidecar_preset_and_multi_connection_contract
 
 def test_admin_catalog_contract_keeps_same_provider_on_multiple_base_urls(tmp_path):
     app = create_app(repository=Repository(Database(tmp_path / "gateway.sqlite3")), api_token="api", admin_token="admin")
-    response = TestClient(app).get("/admin", headers={"Authorization": "Bearer admin"})
+    response = TestClient(app).get("/admin/legacy", headers={"Authorization": "Bearer admin"})
 
     assert "normalizeConnectionKey" in response.text
     assert "provider + base_url" in response.text
@@ -265,7 +265,7 @@ def test_admin_can_validate_unsaved_connection_and_list_models(tmp_path, monkeyp
 
 def test_admin_page_exposes_connection_and_model_selection_controls(tmp_path):
     app = create_app(repository=Repository(Database(tmp_path / "gateway.sqlite3")), api_token="api", admin_token="admin")
-    response = TestClient(app).get("/admin", headers={"Authorization": "Bearer admin"})
+    response = TestClient(app).get("/admin/legacy", headers={"Authorization": "Bearer admin"})
 
     assert response.status_code == 200
     for marker in ("connection-candidates", "selected_models", "validate-connection", "bulk-connections"):
@@ -293,7 +293,7 @@ def test_admin_rejects_credentials_in_loopback_base_url(tmp_path):
 def test_admin_page_uses_distinct_color_class_for_disabled_status():
     app = create_app(ModelGateway([], {}), api_token="api", admin_token="admin")
 
-    response = TestClient(app).get("/admin")
+    response = TestClient(app).get("/admin/legacy")
 
     assert ".disabled { color:" in response.text
     assert "routeStatusClass=(health,enabled)=>enabled?(health==='healthy'?'ok'" in response.text
@@ -301,7 +301,7 @@ def test_admin_page_uses_distinct_color_class_for_disabled_status():
 
 
 def test_admin_catalog_registration_controls_use_stable_vertical_layout():
-    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin")
+    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin/legacy")
 
     assert response.status_code == 200
     assert ".catalog-register { display:flex; flex-direction:column;" in response.text
@@ -310,7 +310,7 @@ def test_admin_catalog_registration_controls_use_stable_vertical_layout():
 
 def test_admin_provider_grid_adapts_to_narrow_panels():
     app = create_app(ModelGateway([], {}), api_token="api", admin_token="admin")
-    response = TestClient(app).get("/admin")
+    response = TestClient(app).get("/admin/legacy")
 
     assert response.status_code == 200
     assert ".provider-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr)); gap:12px; }" in response.text
@@ -319,7 +319,7 @@ def test_admin_provider_grid_adapts_to_narrow_panels():
 
 def test_admin_page_exposes_bulk_model_controls():
     app = create_app(ModelGateway([], {}), api_token="api", admin_token="admin")
-    response = TestClient(app).get("/admin")
+    response = TestClient(app).get("/admin/legacy")
 
     assert response.status_code == 200
     assert 'id="bulk-models"' in response.text
@@ -331,7 +331,7 @@ def test_admin_page_exposes_bulk_model_controls():
 def test_admin_page_exposes_provider_protocol_selector():
     app = create_app(ModelGateway([], {}), api_token="api", admin_token="admin")
 
-    response = TestClient(app).get("/admin")
+    response = TestClient(app).get("/admin/legacy")
 
     assert response.status_code == 200
     assert '<select name="protocol"' in response.text
@@ -344,7 +344,7 @@ def test_admin_page_exposes_provider_protocol_selector():
 
 
 def test_admin_page_exposes_provider_model_list_markup():
-    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin")
+    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin/legacy")
 
     assert response.status_code == 200
     assert 'id="providers"' in response.text
@@ -353,14 +353,14 @@ def test_admin_page_exposes_provider_model_list_markup():
 
 
 def test_admin_page_matches_catalog_provider_by_name_for_every_offer():
-    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin")
+    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin/legacy")
 
     assert "catalogProviderFor" in response.text
     assert "catalogProviderFor(offer)" in response.text
 
 
 def test_admin_catalog_offer_without_endpoint_does_not_fall_back_to_another_provider():
-    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin")
+    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin/legacy")
 
     assert "const offerProviderId=offer?(matched?.id||catalogMatch?.id||CUSTOM_PROVIDER_ID)" in response.text
     assert "custom_provider_name" in response.text
@@ -369,7 +369,7 @@ def test_admin_catalog_offer_without_endpoint_does_not_fall_back_to_another_prov
 
 
 def test_admin_page_exposes_settings_runtime_details_and_copy_controls():
-    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin")
+    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin/legacy")
 
     assert response.status_code == 200
     for marker in ("settings-chat", "settings-images", "settings-db", "settings-catalog", "settings-logs"):
@@ -380,7 +380,7 @@ def test_admin_page_exposes_settings_runtime_details_and_copy_controls():
 
 
 def test_admin_page_exposes_manual_reasoning_effort_control():
-    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin")
+    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin/legacy")
 
     assert response.status_code == 200
     assert "reasoning_effort" in response.text
@@ -391,7 +391,7 @@ def test_admin_page_exposes_manual_reasoning_effort_control():
 
 
 def test_admin_page_prefills_groq_gpt_oss_model():
-    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin")
+    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin/legacy")
 
     assert response.status_code == 200
     assert "openai/gpt-oss-120b" in response.text
@@ -399,7 +399,7 @@ def test_admin_page_prefills_groq_gpt_oss_model():
 
 
 def test_admin_page_combines_health_monitoring_into_model_pool():
-    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin")
+    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin/legacy")
 
     assert 'data-view="health"' not in response.text
     assert 'id="view-health"' not in response.text
@@ -412,7 +412,7 @@ def test_admin_page_combines_health_monitoring_into_model_pool():
 
 
 def test_admin_page_exposes_connection_log_panel_in_model_pool():
-    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin")
+    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin/legacy")
 
     assert response.status_code == 200
     for marker in ("connection-log", "connection-log-rows", "connectionLogTitle", "loadConnections", "thConnectionRoute", "thConnectionResult"):
@@ -420,7 +420,7 @@ def test_admin_page_exposes_connection_log_panel_in_model_pool():
 
 
 def test_admin_page_exposes_custom_provider_fields_in_add_model_form():
-    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin")
+    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin/legacy")
 
     assert response.status_code == 200
     assert 'value="__custom__"' in response.text
@@ -438,7 +438,7 @@ def test_admin_page_exposes_custom_provider_fields_in_add_model_form():
 
 
 def test_admin_page_uses_unsaved_connection_discovery_for_custom_provider():
-    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin")
+    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin/legacy")
 
     assert response.status_code == 200
     assert "const custom=form.elements.provider_id.value===CUSTOM_PROVIDER_ID" in response.text
@@ -446,8 +446,33 @@ def test_admin_page_uses_unsaved_connection_discovery_for_custom_provider():
 
 
 def test_admin_page_validates_custom_provider_before_discovery_or_save():
-    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin")
+    response = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin")).get("/admin/legacy")
 
     assert response.status_code == 200
     assert "customProviderValid" in response.text
     assert "customProviderRequired" in response.text
+
+
+
+def test_admin_prefers_react_bundle_when_built(tmp_path, monkeypatch):
+    dist = tmp_path / "admin"
+    assets = dist / "assets"
+    assets.mkdir(parents=True)
+    (dist / "index.html").write_text(
+        "<!doctype html><html><head><title>React Admin</title></head><body><div id='root'>react-shell</div></body></html>",
+        encoding="utf-8",
+    )
+    (assets / "app.js").write_text("window.__react_admin__ = true;", encoding="utf-8")
+    monkeypatch.setenv("FREELLM_GATEWAY_ADMIN_DIST", str(dist))
+
+    client = TestClient(create_app(ModelGateway([], {}), api_token="api", admin_token="admin"))
+
+    response = client.get("/admin")
+    asset = client.get("/admin/assets/app.js")
+    legacy = client.get("/admin/legacy")
+
+    assert response.status_code == 200
+    assert "react-shell" in response.text
+    assert asset.status_code == 200
+    assert "__react_admin__" in asset.text
+    assert "Model Pool" in legacy.text
