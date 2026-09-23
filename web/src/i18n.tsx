@@ -5,7 +5,7 @@ export type Translate = (key: string, params?: Record<string, string | number>) 
 
 const STORAGE_KEY = "freellm_gateway_language";
 
-const messages: Record<Language, Record<string, string>> = {
+export const messages: Record<Language, Record<string, string>> = {
   zh: {
     "lang.zh": "中文",
     "lang.en": "EN",
