@@ -76,10 +76,10 @@ export function catalogRouteDraft(offer: CatalogOffer) {
   };
 }
 
-export function atomGitPreset(): ProviderDraft {
+export function atomGitPreset(name = "AtomGit CodingPlan · Local sidecar"): ProviderDraft {
   return {
     id: "atomgit-codingplan-local",
-    name: "AtomGit CodingPlan · 本机 sidecar",
+    name,
     protocol: "openai",
     base_url: "http://127.0.0.1:8080/v1",
     official_url: "https://ai.atomgit.com",
