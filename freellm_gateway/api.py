@@ -154,6 +154,11 @@ def create_app(
             "enabled": route.enabled,
             "health": route.health.value,
             "reasoning_effort": route.reasoning_effort,
+            "pricing": {
+                "currency": route.pricing_currency,
+                "input_per_million": route.input_price_per_million,
+                "output_per_million": route.output_price_per_million,
+            },
             "public_url": route.public_url,
             "public_docs_url": route.public_docs_url,
             "free_summary": route.free_summary,
@@ -288,6 +293,67 @@ def create_app(
         except sqlite3.IntegrityError as error:
             raise HTTPException(status_code=409, detail="application already exists") from error
         return {"application": application.__dict__, "api_key": application_key}
+
+    @app.get("/api/admin/quotas")
+    def admin_list_quotas(
+        request: Request,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(request, authorization)
+        policies = repository.list_quota_policies() if repository else []
+        return {
+            "data": [
+                {
+                    **policy.__dict__,
+                    "cost_limit": (
+                        None
+                        if policy.cost_limit_micros is None
+                        else round(policy.cost_limit_micros / 1_000_000, 6)
+                    ),
+                }
+                for policy in policies
+            ]
+        }
+
+    @app.put("/api/admin/quotas/{scope_type}/{scope_id}")
+    def admin_set_quota(
+        scope_type: str,
+        scope_id: str,
+        request: Request,
+        payload: dict,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(request, authorization)
+        if repository is None:
+            raise HTTPException(status_code=503, detail="persistence is not configured")
+        if scope_type not in {"tenant", "application"}:
+            raise HTTPException(status_code=422, detail="scope_type must be tenant or application")
+        token_limit = _optional_nonnegative_int(payload.get("token_limit"), "token_limit")
+        cost_limit = _optional_nonnegative_number(payload.get("cost_limit"), "cost_limit")
+        cost_limit_micros = None if cost_limit is None else round(cost_limit * 1_000_000)
+        currency = _pricing_currency(payload.get("currency", "USD"))
+        try:
+            policy = repository.save_quota_policy(
+                scope_type,
+                scope_id,
+                token_limit=token_limit,
+                cost_limit_micros=cost_limit_micros,
+                currency=currency,
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=f"{scope_type} not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return {
+            "data": {
+                **policy.__dict__,
+                "cost_limit": (
+                    None
+                    if policy.cost_limit_micros is None
+                    else round(policy.cost_limit_micros / 1_000_000, 6)
+                ),
+            }
+        }
 
     @app.get("/api/admin/usage")
     def admin_usage(
@@ -528,6 +594,11 @@ def create_app(
             if not isinstance(capabilities, list) or not capabilities or any(not isinstance(item, str) for item in capabilities):
                 raise HTTPException(status_code=422, detail="capabilities must be a non-empty string list")
             updates["capabilities"] = frozenset(capabilities)
+        for field in ("input_price_per_million", "output_price_per_million"):
+            if field in payload:
+                updates[field] = _optional_nonnegative_number(payload[field], field)
+        if "pricing_currency" in payload:
+            updates["pricing_currency"] = _pricing_currency(payload["pricing_currency"])
         provider_id = updates.get("provider_id", current.provider_id)
         if repository and not any(provider.id == provider_id for provider in repository.list_providers()):
             raise HTTPException(status_code=422, detail="provider must exist before updating a route")
@@ -882,6 +953,15 @@ def _route_from_payload(payload: dict, priority: int):
         public_docs_url=payload.get("public_docs_url"),
         free_summary=payload.get("free_summary"),
         catalog_status=payload.get("catalog_status", "draft"),
+        input_price_per_million=_optional_nonnegative_number(
+            payload.get("input_price_per_million"),
+            "input_price_per_million",
+        ),
+        output_price_per_million=_optional_nonnegative_number(
+            payload.get("output_price_per_million"),
+            "output_price_per_million",
+        ),
+        pricing_currency=_pricing_currency(payload.get("pricing_currency", "USD")),
     )
 
 
@@ -961,6 +1041,28 @@ def _bulk_route_id(provider_id: str, remote_model: str) -> str:
     readable = readable[:90].rstrip("-")
     digest = sha1(f"{provider_id}\0{remote_model}".encode("utf-8")).hexdigest()[:10]
     return f"{readable or 'model'}-{digest}"
+
+
+def _optional_nonnegative_int(value: object, field: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise HTTPException(status_code=422, detail=f"{field} must be a non-negative integer or null")
+    return value
+
+
+def _optional_nonnegative_number(value: object, field: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise HTTPException(status_code=422, detail=f"{field} must be a non-negative number or null")
+    return float(value)
+
+
+def _pricing_currency(value: object) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value.strip()) > 8:
+        raise HTTPException(status_code=422, detail="currency must be a non-empty string up to 8 characters")
+    return value.strip().upper()
 
 
 def _require_identity_id(value: object, field: str) -> str:
