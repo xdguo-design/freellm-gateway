@@ -68,7 +68,7 @@ export default function App() {
   }
 
   let page;
-  if (view === "models") page = <ModelsPage routes={routes} providers={providers} onRefresh={refresh} />;
+  if (view === "models") page = <ModelsPage routes={routes} providers={providers} connections={connections} onRefresh={refresh} />;
   else if (view === "usage") page = <UsagePage />;
   else if (view === "routing") page = <RoutingPage routes={routes} />;
   else if (view === "catalog") page = <CatalogPage />;

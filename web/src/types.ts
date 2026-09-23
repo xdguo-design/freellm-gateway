@@ -187,14 +187,24 @@ export interface UsageSummary {
 
 export interface CatalogOffer {
   id?: string;
+  order?: number;
+  date?: string;
+  name?: string;
+  providerMark?: string;
   provider?: string;
   model?: string;
-  name?: string;
+  modelMeta?: string;
+  productType?: string;
   capabilities?: string[];
-  free_summary?: string;
-  public_url?: string;
-  docs_url?: string;
-  official_url?: string;
+  usageGuide?: unknown;
+  register?: string;
+  registerLabel?: string;
+  docsUrl?: string;
+  apiEndpoint?: string;
+  freeSummary?: string;
+  validitySummary?: string;
+  accessSummary?: string;
+  badges?: string[];
   pool_status?: string;
   [key: string]: unknown;
 }
