@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from freellm_gateway.api import create_app
 from freellm_gateway.db import Database
-from freellm_gateway.models import ModelRoute
+from freellm_gateway.models import ModelRoute, Provider
 from freellm_gateway.repository import Repository
 from freellm_gateway.service import ModelGateway
 
@@ -34,14 +34,29 @@ class StreamingUsageAdapter:
         yield b"data: [DONE]\n\n"
 
 
-def make_usage_client(tmp_path, adapter):
+def make_usage_client(
+    tmp_path,
+    adapter,
+    *,
+    input_price_per_million=None,
+    output_price_per_million=None,
+    pricing_currency="USD",
+):
     repository = Repository(Database(tmp_path / "gateway.sqlite3"))
+    repository.initialize()
+    repository.save_provider(
+        Provider("provider", "Provider", "openai", "https://example.test/v1", "https://example.test")
+    )
     route = ModelRoute(
         id="route",
         provider_id="provider",
         remote_model="remote-model",
         priority=1,
+        input_price_per_million=input_price_per_million,
+        output_price_per_million=output_price_per_million,
+        pricing_currency=pricing_currency,
     )
+    repository.save_route(route)
     gateway = ModelGateway([route], {"route": adapter})
     app = create_app(
         gateway=gateway,
@@ -336,6 +351,170 @@ def test_stream_chat_persists_authenticated_tenant_application_usage(tmp_path):
     assert data["total_tokens"] == 10
 
 
+def test_estimated_cost_is_snapshotted_from_route_pricing(tmp_path):
+    client, repository = make_usage_client(
+        tmp_path,
+        UsageAdapter(),
+        input_price_per_million=2.0,
+        output_price_per_million=4.0,
+        pricing_currency="USD",
+    )
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer api-token"},
+        json={"model": "remote-model", "messages": [{"role": "user", "content": "hello"}]},
+    )
+    assert response.status_code == 200
+
+    summary = repository.usage_summary(7)
+    assert summary["priced_calls"] == 1
+    assert summary["unpriced_calls"] == 0
+    assert summary["estimated_costs"] == [
+        {"currency": "USD", "micros": 44, "amount": 0.000044}
+    ]
+
+    route = repository.list_routes()[0]
+    repository.save_route(
+        ModelRoute(
+            **{
+                **route.__dict__,
+                "input_price_per_million": 100.0,
+                "output_price_per_million": 100.0,
+            }
+        )
+    )
+    unchanged = repository.usage_summary(7)
+    assert unchanged["estimated_costs"][0]["micros"] == 44
+
+
+def test_missing_route_price_is_reported_as_unpriced_not_zero_cost(tmp_path):
+    client, repository = make_usage_client(tmp_path, UsageAdapter())
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer api-token"},
+        json={"model": "remote-model", "messages": [{"role": "user", "content": "hello"}]},
+    )
+
+    assert response.status_code == 200
+    summary = repository.usage_summary(7)
+    assert summary["priced_calls"] == 0
+    assert summary["unpriced_calls"] == 1
+    assert summary["estimated_costs"] == []
+
+
+def test_monthly_tenant_and_application_quotas_report_used_and_remaining(tmp_path):
+    client, repository = make_usage_client(
+        tmp_path,
+        UsageAdapter(),
+        input_price_per_million=2.0,
+        output_price_per_million=4.0,
+    )
+    client.post(
+        "/api/admin/tenants",
+        headers=admin_headers(),
+        json={"id": "tenant-q", "name": "Tenant Q"},
+    )
+    application = client.post(
+        "/api/admin/applications",
+        headers=admin_headers(),
+        json={"id": "app-q", "tenant_id": "tenant-q", "name": "App Q"},
+    ).json()
+    key = application["api_key"]
+
+    tenant_quota = client.put(
+        "/api/admin/quotas/tenant/tenant-q",
+        headers=admin_headers(),
+        json={"token_limit": 100, "cost_limit": 0.001, "currency": "USD"},
+    )
+    app_quota = client.put(
+        "/api/admin/quotas/application/app-q",
+        headers=admin_headers(),
+        json={"token_limit": 50, "cost_limit": 0.0001, "currency": "USD"},
+    )
+    assert tenant_quota.status_code == 200
+    assert app_quota.status_code == 200
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={"model": "remote-model", "messages": [{"role": "user", "content": "hello"}]},
+    )
+    assert response.status_code == 200
+
+    summary = repository.usage_summary(7, tenant_id="tenant-q")
+    tenant = summary["by_tenant"][0]["quota"]
+    application_row = summary["by_application"][0]["quota"]
+
+    assert tenant["used_tokens"] == 17
+    assert tenant["remaining_tokens"] == 83
+    assert tenant["used_cost_micros"] == 44
+    assert tenant["remaining_cost_micros"] == 956
+    assert tenant["cost_complete"] is True
+
+    assert application_row["used_tokens"] == 17
+    assert application_row["remaining_tokens"] == 33
+    assert application_row["used_cost_micros"] == 44
+    assert application_row["remaining_cost_micros"] == 56
+    assert summary["selected_quota"]["scope_id"] == "tenant-q"
+
+
+def test_quota_cost_is_incomplete_when_usage_is_unpriced(tmp_path):
+    client, repository = make_usage_client(tmp_path, UsageAdapter())
+    client.post(
+        "/api/admin/tenants",
+        headers=admin_headers(),
+        json={"id": "tenant-unpriced", "name": "Tenant Unpriced"},
+    )
+    key = client.post(
+        "/api/admin/applications",
+        headers=admin_headers(),
+        json={"id": "app-unpriced", "tenant_id": "tenant-unpriced", "name": "App Unpriced"},
+    ).json()["api_key"]
+    client.put(
+        "/api/admin/quotas/tenant/tenant-unpriced",
+        headers=admin_headers(),
+        json={"token_limit": 100, "cost_limit": 1, "currency": "USD"},
+    )
+
+    client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={"model": "remote-model", "messages": [{"role": "user", "content": "hello"}]},
+    )
+
+    quota = repository.usage_summary(7, tenant_id="tenant-unpriced")["selected_quota"]
+    assert quota["used_tokens"] == 17
+    assert quota["unpriced_calls"] == 1
+    assert quota["cost_complete"] is False
+
+
+def test_route_pricing_can_be_updated_through_admin_api(tmp_path):
+    client, repository = make_usage_client(tmp_path, UsageAdapter())
+
+    response = client.patch(
+        "/api/admin/routes/route",
+        headers=admin_headers(),
+        json={
+            "input_price_per_million": 1.25,
+            "output_price_per_million": 5.0,
+            "pricing_currency": "usd",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["pricing"] == {
+        "currency": "USD",
+        "input_per_million": 1.25,
+        "output_per_million": 5.0,
+    }
+    stored = repository.list_routes()[0]
+    assert stored.input_price_per_million == 1.25
+    assert stored.output_price_per_million == 5.0
+    assert stored.pricing_currency == "USD"
+
+
 def test_existing_usage_database_is_migrated_with_identity_defaults(tmp_path):
     path = tmp_path / "legacy.sqlite3"
     connection = sqlite3.connect(path)
@@ -372,7 +551,13 @@ def test_existing_usage_database_is_migrated_with_identity_defaults(tmp_path):
             "SELECT tenant_id, application_id FROM usage_records WHERE request_id = 'legacy'"
         ).fetchone()
 
-    assert {"tenant_id", "application_id"}.issubset(columns)
+    assert {
+        "tenant_id",
+        "application_id",
+        "route_id",
+        "estimated_cost_micros",
+        "cost_currency",
+    }.issubset(columns)
     assert row["tenant_id"] == "system"
     assert row["application_id"] == "legacy-global"
 
@@ -390,4 +575,7 @@ def test_admin_page_contains_usage_dimension_filters_and_summaries(tmp_path):
     assert 'id="usage-filter-model"' in response.text
     assert 'id="usage-tenant-rows"' in response.text
     assert 'id="usage-application-rows"' in response.text
+    assert 'id="usage-cost"' in response.text
+    assert 'id="quota-form"' in response.text
     assert "/api/admin/usage?" in response.text
+    assert "/api/admin/quotas" in response.text
