@@ -907,7 +907,7 @@ class Repository:
 
         policies = connection.execute(
             """SELECT scope_type, scope_id, token_limit, cost_limit_micros,
-                      currency, updated_at
+                      currency, warning_threshold_percent, updated_at
                FROM quota_policies"""
         ).fetchall()
         token_rows = connection.execute(
@@ -997,6 +997,7 @@ class Repository:
                 "scope_type": scope_type,
                 "scope_id": scope_id,
                 "currency": currency,
+                "warning_threshold_percent": float(policy["warning_threshold_percent"]),
                 "token_limit": token_limit,
                 "used_tokens": used_tokens,
                 "remaining_tokens": token_remaining,
@@ -1017,6 +1018,22 @@ class Repository:
                 "unpriced_calls": unpriced_calls,
                 "other_currency_calls": other_currency_calls,
                 "cost_complete": unpriced_calls == 0 and other_currency_calls == 0,
+                "token_warning": (
+                    token_limit is not None
+                    and (
+                        100.0 if int(token_limit) == 0
+                        else used_tokens * 100 / int(token_limit)
+                    ) >= float(policy["warning_threshold_percent"])
+                ),
+                "cost_warning": (
+                    cost_limit is not None
+                    and (
+                        100.0 if int(cost_limit) == 0
+                        else used_cost * 100 / int(cost_limit)
+                    ) >= float(policy["warning_threshold_percent"])
+                ),
+                "token_exceeded": token_limit is not None and used_tokens >= int(token_limit),
+                "cost_exceeded": cost_limit is not None and used_cost >= int(cost_limit),
             }
         return result
 
