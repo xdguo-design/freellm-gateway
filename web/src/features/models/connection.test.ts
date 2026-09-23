@@ -33,6 +33,23 @@ describe("provider connection helpers", () => {
     expect(provider.official_url).toBe("https://example.com/register");
   });
 
+  it("uses endpoint identity to distinguish same-name catalog providers", () => {
+    const first = providerFromCatalogOffer({
+      provider: "Example AI",
+      model: "a",
+      apiEndpoint: "https://api-one.example/v1/chat/completions",
+      register: "https://example.com",
+    });
+    const second = providerFromCatalogOffer({
+      provider: "Example AI",
+      model: "b",
+      apiEndpoint: "https://api-two.example/v1/chat/completions",
+      register: "https://example.com",
+    });
+    expect(first.id).not.toBe(second.id);
+    expect(connectionKey(first)).not.toBe(connectionKey(second));
+  });
+
   it("preserves catalog metadata in a route draft", () => {
     const draft = catalogRouteDraft({
       provider: "Example AI",
