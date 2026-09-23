@@ -264,26 +264,29 @@ export function ModelsPage({
       setMessage(t("models.providerRequired"));
       return;
     }
-    if (draft.provider_id === CUSTOM_PROVIDER_ID) await ensureProvider(provider);
-
-    const payload = {
-      id: draft.id || `${provider.id}-${draft.remote_model}`.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
-      provider_id: provider.id,
-      remote_model: draft.remote_model.trim(),
-      ...routeCommonPayload(),
-      ...(draft.credential.trim() ? { credential: draft.credential.trim() } : {}),
-    };
-    await api(editing ? `/api/admin/routes/${encodeURIComponent(editing)}` : "/api/admin/routes", {
-      method: editing ? "PATCH" : "POST",
-      body: payload,
-    });
-    setDraft(blankRoute());
-    setCustomProvider(blankProvider());
-    setEditing(null);
-    setModelOptions([]);
-    setSelectedModels([]);
-    setMessage(t("models.routeSaved"));
-    await onRefresh();
+    try {
+      if (draft.provider_id === CUSTOM_PROVIDER_ID) await ensureProvider(provider);
+      const payload = {
+        id: draft.id || `${provider.id}-${draft.remote_model}`.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+        provider_id: provider.id,
+        remote_model: draft.remote_model.trim(),
+        ...routeCommonPayload(),
+        ...(draft.credential.trim() ? { credential: draft.credential.trim() } : {}),
+      };
+      await api(editing ? `/api/admin/routes/${encodeURIComponent(editing)}` : "/api/admin/routes", {
+        method: editing ? "PATCH" : "POST",
+        body: payload,
+      });
+      setDraft(blankRoute());
+      setCustomProvider(blankProvider());
+      setEditing(null);
+      setModelOptions([]);
+      setSelectedModels([]);
+      setMessage(t("models.routeSaved"));
+      await onRefresh();
+    } catch (error) {
+      setMessage(errorText(error));
+    }
   }
 
   async function saveSelectedModels() {
@@ -292,27 +295,32 @@ export function ModelsPage({
       setMessage(t("models.needModels"));
       return;
     }
-    const result = await api<{ data: { created: Route[]; skipped: Array<{ remote_model: string }> } }>("/api/admin/routes/bulk", {
-      method: "POST",
-      body: {
-        provider: providerPayload(provider),
-        models: selectedModels.map((remote_model) => ({
-          remote_model,
-          enabled: true,
-        })),
-        ...routeCommonPayload(),
-        ...(draft.credential.trim() ? { credential: draft.credential.trim() } : {}),
-      },
-    });
-    setMessage(t("models.bulkDone", { created: result.data.created.length, skipped: result.data.skipped.length }));
-    await onRefresh();
+    try {
+      const result = await api<{ data: { created: Route[]; skipped: Array<{ remote_model: string }> } }>("/api/admin/routes/bulk", {
+        method: "POST",
+        body: {
+          provider: providerPayload(provider),
+          models: selectedModels.map((remote_model) => ({ remote_model, enabled: true })),
+          ...routeCommonPayload(),
+          ...(draft.credential.trim() ? { credential: draft.credential.trim() } : {}),
+        },
+      });
+      setMessage(t("models.bulkDone", { created: result.data.created.length, skipped: result.data.skipped.length }));
+      await onRefresh();
+    } catch (error) {
+      setMessage(errorText(error));
+    }
   }
 
   async function mutate(route: Route, action: "probe" | "toggle" | "delete") {
-    if (action === "probe") await api(`/api/admin/routes/${encodeURIComponent(route.id)}/probe`, { method: "POST" });
-    if (action === "toggle") await api(`/api/admin/routes/${encodeURIComponent(route.id)}`, { method: "PATCH", body: { enabled: !route.enabled } });
-    if (action === "delete") await api(`/api/admin/routes/${encodeURIComponent(route.id)}`, { method: "DELETE" });
-    await onRefresh();
+    try {
+      if (action === "probe") await api(`/api/admin/routes/${encodeURIComponent(route.id)}/probe`, { method: "POST" });
+      if (action === "toggle") await api(`/api/admin/routes/${encodeURIComponent(route.id)}`, { method: "PATCH", body: { enabled: !route.enabled } });
+      if (action === "delete") await api(`/api/admin/routes/${encodeURIComponent(route.id)}`, { method: "DELETE" });
+      await onRefresh();
+    } catch (error) {
+      setMessage(errorText(error));
+    }
   }
 
   async function probeAll() {
@@ -338,9 +346,13 @@ export function ModelsPage({
   }
 
   async function discover(providerId: string) {
-    const result = await api<{ data: Route[] }>(`/api/admin/providers/${encodeURIComponent(providerId)}/discover`, { method: "POST" });
-    setMessage(t("models.discoverDone", { count: result.data.length }));
-    await onRefresh();
+    try {
+      const result = await api<{ data: Route[] }>(`/api/admin/providers/${encodeURIComponent(providerId)}/discover`, { method: "POST" });
+      setMessage(t("models.discoverDone", { count: result.data.length }));
+      await onRefresh();
+    } catch (error) {
+      setMessage(errorText(error));
+    }
   }
 
   async function move(index: number, delta: -1 | 1) {
@@ -348,16 +360,24 @@ export function ModelsPage({
     if (next < 0 || next >= ordered.length) return;
     const ids = ordered.map((route) => route.id);
     [ids[index], ids[next]] = [ids[next], ids[index]];
-    await api("/api/admin/routes/reorder", { method: "POST", body: { ids } });
-    await onRefresh();
+    try {
+      await api("/api/admin/routes/reorder", { method: "POST", body: { ids } });
+      await onRefresh();
+    } catch (error) {
+      setMessage(errorText(error));
+    }
   }
 
   async function saveProvider(event: FormEvent) {
     event.preventDefault();
-    await api("/api/admin/providers", { method: "POST", body: providerPayload(providerDraft) });
-    setProviderDraft(blankProvider());
-    setMessage(t("models.providerSaved"));
-    await onRefresh();
+    try {
+      await api("/api/admin/providers", { method: "POST", body: providerPayload(providerDraft) });
+      setProviderDraft(blankProvider());
+      setMessage(t("models.providerSaved"));
+      await onRefresh();
+    } catch (error) {
+      setMessage(errorText(error));
+    }
   }
 
   function addMultiConnection(provider?: ProviderDraft) {
