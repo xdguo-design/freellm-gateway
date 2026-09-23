@@ -79,6 +79,50 @@ def test_admin_can_save_custom_provider_and_route(tmp_path):
     assert "secret" not in response.text
 
 
+def test_bulk_route_creation_preserves_explicit_catalog_status(tmp_path):
+    repository = Repository(Database(tmp_path / "gateway.sqlite3"))
+    app = create_app(
+        ModelGateway([], {}),
+        repository=repository,
+        secrets=FakeSecrets(),
+        api_token="api",
+        admin_token="admin",
+    )
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer admin"}
+    provider = {
+        "id": "catalog-provider",
+        "name": "Catalog Provider",
+        "protocol": "openai",
+        "base_url": "https://catalog.example/v1",
+        "official_url": "https://catalog.example",
+    }
+
+    published = client.post(
+        "/api/admin/routes/bulk",
+        headers=headers,
+        json={
+            "provider": provider,
+            "models": [{"remote_model": "published-model"}],
+            "catalog_status": "published",
+        },
+    )
+    draft = client.post(
+        "/api/admin/routes/bulk",
+        headers=headers,
+        json={
+            "provider": provider,
+            "models": [{"remote_model": "draft-model"}],
+        },
+    )
+
+    assert published.status_code == 200
+    assert draft.status_code == 200
+    routes = {route.remote_model: route for route in repository.list_routes()}
+    assert routes["published-model"].catalog_status == "published"
+    assert routes["draft-model"].catalog_status == "draft"
+
+
 def test_admin_overview_and_health_are_available_with_admin_token():
     client, _ = make_client()
     headers = {"Authorization": "Bearer admin"}
