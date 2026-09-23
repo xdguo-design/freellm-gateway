@@ -46,11 +46,17 @@ export function providerFromCatalogOffer(offer: CatalogOffer): ProviderDraft {
     (typeof offer.register === "string" && offer.register) ||
     (typeof offer.docsUrl === "string" && offer.docsUrl) ||
     "";
+  const baseUrl = endpoint ? baseUrlFromEndpoint(endpoint) : "";
+  let identityHint = providerName;
+  if (baseUrl) {
+    const parsed = new URL(baseUrl);
+    identityHint = `${providerName}-${parsed.host}-${parsed.pathname}`;
+  }
   return {
-    id: slugify(providerName),
+    id: slugify(identityHint),
     name: providerName,
     protocol: "openai",
-    base_url: endpoint ? baseUrlFromEndpoint(endpoint) : "",
+    base_url: baseUrl,
     official_url: official,
   };
 }
