@@ -23,7 +23,7 @@ from .adapters.openai import OpenAICompatibleAdapter
 from .catalog import export_catalog, sync_catalog_to_site
 from .connection_log import ConnectionLogger
 from .discovery import discover_new_routes
-from .models import Provider, SUPPORTED_PROVIDER_PROTOCOLS
+from .models import Provider, RequestIdentity, SUPPORTED_PROVIDER_PROTOCOLS
 from .repository import Repository
 from .runtime import build_gateway
 from .runtime import adapter_for_route
@@ -116,9 +116,16 @@ def create_app(
     def require_token(
         authorization: Annotated[str | None, Header()] = None,
         expected: str = api_token,
-    ) -> None:
-        if authorization != f"Bearer {expected}":
+    ) -> RequestIdentity:
+        if authorization == f"Bearer {expected}":
+            return RequestIdentity("system", "legacy-global", "global_token")
+        if not isinstance(authorization, str) or not authorization.startswith("Bearer "):
             raise HTTPException(status_code=401, detail="invalid bearer token")
+        if repository is not None:
+            application = repository.verify_application_key(authorization[7:])
+            if application is not None:
+                return RequestIdentity(application.tenant_id, application.id, "application_key")
+        raise HTTPException(status_code=401, detail="invalid bearer token")
 
     def require_admin(request: Request, authorization: str | None) -> None:
         host = request.client.host if request.client else None
@@ -225,10 +232,71 @@ def create_app(
         require_admin(request, authorization)
         return {"data": app.state.connection_log.read(max(1, min(limit, 500)))}
 
+    @app.get("/api/admin/tenants")
+    def admin_list_tenants(
+        request: Request,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(request, authorization)
+        return {"data": [tenant.__dict__ for tenant in (repository.list_tenants() if repository else [])]}
+
+    @app.post("/api/admin/tenants", status_code=201)
+    def admin_create_tenant(
+        request: Request,
+        payload: dict,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(request, authorization)
+        if repository is None:
+            raise HTTPException(status_code=503, detail="persistence is not configured")
+        tenant_id = _require_identity_id(payload.get("id"), "tenant id")
+        name = _require_identity_name(payload.get("name"), "tenant name")
+        try:
+            tenant = repository.create_tenant(tenant_id, name)
+        except sqlite3.IntegrityError as error:
+            raise HTTPException(status_code=409, detail="tenant already exists") from error
+        return tenant.__dict__
+
+    @app.get("/api/admin/applications")
+    def admin_list_applications(
+        request: Request,
+        tenant_id: str | None = None,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(request, authorization)
+        applications = repository.list_applications(tenant_id) if repository else []
+        return {"data": [application.__dict__ for application in applications]}
+
+    @app.post("/api/admin/applications", status_code=201)
+    def admin_create_application(
+        request: Request,
+        payload: dict,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(request, authorization)
+        if repository is None:
+            raise HTTPException(status_code=503, detail="persistence is not configured")
+        application_id = _require_identity_id(payload.get("id"), "application id")
+        tenant_id = _require_identity_id(payload.get("tenant_id"), "tenant id")
+        name = _require_identity_name(payload.get("name"), "application name")
+        try:
+            application, application_key = repository.create_application(application_id, tenant_id, name)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="tenant not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except sqlite3.IntegrityError as error:
+            raise HTTPException(status_code=409, detail="application already exists") from error
+        return {"application": application.__dict__, "api_key": application_key}
+
     @app.get("/api/admin/usage")
     def admin_usage(
         request: Request,
         days: int = 7,
+        tenant_id: str | None = None,
+        application_id: str | None = None,
+        provider_id: str | None = None,
+        remote_model: str | None = None,
         authorization: Annotated[str | None, Header()] = None,
     ):
         require_admin(request, authorization)
@@ -236,16 +304,31 @@ def create_app(
             return {
                 "data": {
                     "days": max(1, min(days, 365)),
+                    "filters": {},
+                    "filter_options": {
+                        "tenants": [], "applications": [], "providers": [], "models": []
+                    },
                     "calls": 0,
                     "prompt_tokens": 0,
                     "completion_tokens": 0,
                     "total_tokens": 0,
                     "avg_latency_ms": 0.0,
+                    "by_tenant": [],
+                    "by_application": [],
+                    "by_provider": [],
                     "by_model": [],
                     "by_day": [],
                 }
             }
-        return {"data": repository.usage_summary(days)}
+        return {
+            "data": repository.usage_summary(
+                days,
+                tenant_id=tenant_id,
+                application_id=application_id,
+                provider_id=provider_id,
+                remote_model=remote_model,
+            )
+        }
 
     @app.get("/v1/models")
     def list_models(authorization: Annotated[str | None, Header()] = None) -> dict:
@@ -267,22 +350,37 @@ def create_app(
 
     @app.post("/v1/chat/completions")
     async def chat_completions(payload: dict, authorization: Annotated[str | None, Header()] = None):
-        require_token(authorization)
+        identity = require_token(authorization)
+        usage_context = {
+            "tenant_id": identity.tenant_id,
+            "application_id": identity.application_id,
+        }
         _require_known_model(payload.get("model", "auto"), gateway)
         if payload.get("stream"):
-            return StreamingResponse(gateway.stream(payload), media_type="text/event-stream")
+            return StreamingResponse(
+                gateway.stream(payload, usage_context=usage_context),
+                media_type="text/event-stream",
+            )
         try:
-            return await gateway.complete(payload)
+            return await gateway.complete(payload, usage_context=usage_context)
         except ProviderError as error:
             raise HTTPException(status_code=error.status_code, detail=error.kind) from error
 
     @app.post("/v1/images/generations")
     async def image_generations(payload: dict, authorization: Annotated[str | None, Header()] = None):
-        require_token(authorization)
+        identity = require_token(authorization)
+        usage_context = {
+            "tenant_id": identity.tenant_id,
+            "application_id": identity.application_id,
+        }
         payload = {**payload, "task": "image_generation"}
         _require_known_model(payload.get("model", "auto"), gateway)
         try:
-            return await gateway.complete(payload, capability="image_generation")
+            return await gateway.complete(
+                payload,
+                capability="image_generation",
+                usage_context=usage_context,
+            )
         except ProviderError as error:
             raise HTTPException(status_code=error.status_code, detail=error.kind) from error
 
@@ -863,6 +961,27 @@ def _bulk_route_id(provider_id: str, remote_model: str) -> str:
     readable = readable[:90].rstrip("-")
     digest = sha1(f"{provider_id}\0{remote_model}".encode("utf-8")).hexdigest()[:10]
     return f"{readable or 'model'}-{digest}"
+
+
+def _require_identity_id(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        raise HTTPException(status_code=422, detail=f"{field} is required")
+    normalized = value.strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,63}", normalized):
+        raise HTTPException(
+            status_code=422,
+            detail=f"{field} must be 1-64 letters, digits or hyphens",
+        )
+    return normalized
+
+
+def _require_identity_name(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise HTTPException(status_code=422, detail=f"{field} is required")
+    normalized = value.strip()
+    if len(normalized) > 120:
+        raise HTTPException(status_code=422, detail=f"{field} must be at most 120 characters")
+    return normalized
 
 
 def _require_known_model(model: str, gateway: ModelGateway) -> None:
