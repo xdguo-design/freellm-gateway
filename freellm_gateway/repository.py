@@ -134,7 +134,7 @@ class Repository:
                      COALESCE(SUM(total_tokens), 0) AS total_tokens,
                      COALESCE(AVG(elapsed_ms), 0) AS avg_latency_ms
                    FROM usage_records
-                   WHERE created_at >= datetime('now', ?)""",
+                   WHERE datetime(created_at) >= datetime('now', ?)""",
                 (window,),
             ).fetchone()
             by_model = connection.execute(
@@ -147,7 +147,7 @@ class Repository:
                      COALESCE(SUM(total_tokens), 0) AS total_tokens,
                      COALESCE(AVG(elapsed_ms), 0) AS avg_latency_ms
                    FROM usage_records
-                   WHERE created_at >= datetime('now', ?)
+                   WHERE datetime(created_at) >= datetime('now', ?)
                    GROUP BY provider_id, remote_model
                    ORDER BY total_tokens DESC, calls DESC
                    LIMIT 50""",
@@ -161,7 +161,7 @@ class Repository:
                      COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
                      COALESCE(SUM(total_tokens), 0) AS total_tokens
                    FROM usage_records
-                   WHERE created_at >= datetime('now', ?)
+                   WHERE datetime(created_at) >= datetime('now', ?)
                    GROUP BY date(created_at)
                    ORDER BY day""",
                 (window,),
