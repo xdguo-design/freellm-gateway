@@ -106,7 +106,12 @@ def create_app(
             str(app.state.logs_path.with_name("gateway-connections.jsonl")),
         )
     )
-    gateway.on_connection_logged = app.state.connection_log.append
+    def persist_connection(entry: dict) -> None:
+        app.state.connection_log.append(entry)
+        if repository is not None:
+            repository.save_usage_from_connection(entry)
+
+    gateway.on_connection_logged = persist_connection
 
     def require_token(
         authorization: Annotated[str | None, Header()] = None,
@@ -219,6 +224,28 @@ def create_app(
     def admin_connections(request: Request, limit: int = 100, authorization: Annotated[str | None, Header()] = None):
         require_admin(request, authorization)
         return {"data": app.state.connection_log.read(max(1, min(limit, 500)))}
+
+    @app.get("/api/admin/usage")
+    def admin_usage(
+        request: Request,
+        days: int = 7,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(request, authorization)
+        if repository is None:
+            return {
+                "data": {
+                    "days": max(1, min(days, 365)),
+                    "calls": 0,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "avg_latency_ms": 0.0,
+                    "by_model": [],
+                    "by_day": [],
+                }
+            }
+        return {"data": repository.usage_summary(days)}
 
     @app.get("/v1/models")
     def list_models(authorization: Annotated[str | None, Header()] = None) -> dict:
