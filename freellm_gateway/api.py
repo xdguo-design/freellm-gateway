@@ -1,4 +1,6 @@
 from dataclasses import replace
+from datetime import datetime, timezone
+import json
 from hashlib import sha1
 from ipaddress import ip_address
 import os
@@ -10,7 +12,7 @@ from typing import Annotated
 
 import httpx
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.responses import HTMLResponse
@@ -27,7 +29,7 @@ from .models import Provider, RequestIdentity, SUPPORTED_PROVIDER_PROTOCOLS
 from .repository import Repository
 from .runtime import build_gateway
 from .runtime import adapter_for_route
-from .service import ModelGateway
+from .service import ModelGateway, infer_capability
 from .site_catalog import fetch_public_catalog, model_offers
 
 
@@ -420,25 +422,56 @@ def create_app(
         return {"object": "list", "data": data}
 
     @app.post("/v1/chat/completions")
-    async def chat_completions(payload: dict, authorization: Annotated[str | None, Header()] = None):
+    async def chat_completions(
+        payload: dict,
+        response: Response,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
         identity = require_token(authorization)
         usage_context = {
             "tenant_id": identity.tenant_id,
             "application_id": identity.application_id,
         }
         _require_known_model(payload.get("model", "auto"), gateway)
+        capability = infer_capability(payload)
+        quota_check = _quota_preflight(repository, gateway, identity, payload, capability)
+        quota_headers = _quota_response_headers(quota_check)
+        reservation_id = quota_check.get("reservation_id")
         if payload.get("stream"):
+            async def quota_stream():
+                try:
+                    async for chunk in gateway.stream(payload, usage_context=usage_context):
+                        yield chunk
+                finally:
+                    if repository is not None:
+                        repository.release_quota_reservation(reservation_id)
+
             return StreamingResponse(
-                gateway.stream(payload, usage_context=usage_context),
+                quota_stream(),
                 media_type="text/event-stream",
+                headers=quota_headers,
             )
         try:
-            return await gateway.complete(payload, usage_context=usage_context)
+            result = await gateway.complete(
+                payload,
+                capability=capability,
+                usage_context=usage_context,
+            )
+            for name, value in quota_headers.items():
+                response.headers[name] = value
+            return result
         except ProviderError as error:
             raise HTTPException(status_code=error.status_code, detail=error.kind) from error
+        finally:
+            if repository is not None:
+                repository.release_quota_reservation(reservation_id)
 
     @app.post("/v1/images/generations")
-    async def image_generations(payload: dict, authorization: Annotated[str | None, Header()] = None):
+    async def image_generations(
+        payload: dict,
+        response: Response,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
         identity = require_token(authorization)
         usage_context = {
             "tenant_id": identity.tenant_id,
@@ -446,14 +479,28 @@ def create_app(
         }
         payload = {**payload, "task": "image_generation"}
         _require_known_model(payload.get("model", "auto"), gateway)
+        quota_check = _quota_preflight(
+            repository,
+            gateway,
+            identity,
+            payload,
+            "image_generation",
+        )
+        reservation_id = quota_check.get("reservation_id")
         try:
-            return await gateway.complete(
+            result = await gateway.complete(
                 payload,
                 capability="image_generation",
                 usage_context=usage_context,
             )
+            for name, value in _quota_response_headers(quota_check).items():
+                response.headers[name] = value
+            return result
         except ProviderError as error:
             raise HTTPException(status_code=error.status_code, detail=error.kind) from error
+        finally:
+            if repository is not None:
+                repository.release_quota_reservation(reservation_id)
 
     @app.get("/api/admin/routes")
     def admin_list_routes(request: Request, authorization: Annotated[str | None, Header()] = None):
