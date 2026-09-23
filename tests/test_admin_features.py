@@ -123,6 +123,51 @@ def test_bulk_route_creation_preserves_explicit_catalog_status(tmp_path):
     assert routes["draft-model"].catalog_status == "draft"
 
 
+def test_admin_rejects_invalid_catalog_status(tmp_path):
+    repository = Repository(Database(tmp_path / "gateway.sqlite3"))
+    repository.initialize()
+    repository.save_provider(
+        Provider("p", "Provider", "openai", "https://api.example/v1", "https://example.com")
+    )
+    route = ModelRoute(id="route", provider_id="p", remote_model="m", priority=1)
+    repository.save_route(route)
+    client = TestClient(
+        create_app(
+            ModelGateway([route], {}),
+            repository=repository,
+            api_token="api",
+            admin_token="admin",
+        )
+    )
+    headers = {"Authorization": "Bearer admin"}
+
+    patched = client.patch(
+        "/api/admin/routes/route",
+        headers=headers,
+        json={"catalog_status": "public-ish"},
+    )
+    bulk = client.post(
+        "/api/admin/routes/bulk",
+        headers=headers,
+        json={
+            "provider": {
+                "id": "p",
+                "name": "Provider",
+                "protocol": "openai",
+                "base_url": "https://api.example/v1",
+                "official_url": "https://example.com",
+            },
+            "models": [{"remote_model": "m2"}],
+            "catalog_status": "public-ish",
+        },
+    )
+
+    assert patched.status_code == 422
+    assert bulk.status_code == 422
+    assert "draft or published" in patched.json()["detail"]
+    assert "draft or published" in bulk.json()["detail"]
+
+
 def test_admin_overview_and_health_are_available_with_admin_token():
     client, _ = make_client()
     headers = {"Authorization": "Bearer admin"}
