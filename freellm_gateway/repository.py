@@ -408,15 +408,20 @@ class Repository:
                                 "remaining_after_request_micros": max(0, cost_limit - cost_after),
                             })
                     elif not cost_projection_complete:
-                        warnings.append({
-                            "scope_type": scope_type,
-                            "scope_id": scope_id,
-                            "resource": "cost_projection",
-                            "currency": currency,
-                            "utilization_percent": status["cost_utilization_percent"],
-                            "threshold_percent": threshold,
-                            "projection_complete": False,
-                        })
+                        current_percent = (
+                            100.0 if cost_limit == 0 else used_cost * 100 / cost_limit
+                        )
+                        if current_percent >= threshold:
+                            warnings.append({
+                                "scope_type": scope_type,
+                                "scope_id": scope_id,
+                                "resource": "cost",
+                                "currency": currency,
+                                "utilization_percent": round(current_percent, 2),
+                                "threshold_percent": threshold,
+                                "projection_complete": False,
+                                "remaining_after_request_micros": max(0, cost_limit - used_cost),
+                            })
 
                 checks.append({
                     "scope_type": scope_type,
