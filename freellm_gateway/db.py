@@ -41,6 +41,22 @@ class Database:
                     free_summary TEXT,
                     catalog_status TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS usage_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    request_id TEXT NOT NULL,
+                    provider_id TEXT,
+                    remote_model TEXT,
+                    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                    completion_tokens INTEGER NOT NULL DEFAULT 0,
+                    total_tokens INTEGER NOT NULL DEFAULT 0,
+                    elapsed_ms INTEGER NOT NULL DEFAULT 0,
+                    stream INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_usage_created_at ON usage_records(created_at);
+                CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_records(remote_model);
+                CREATE INDEX IF NOT EXISTS idx_usage_provider ON usage_records(provider_id);
                 """
             )
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(routes)")}
