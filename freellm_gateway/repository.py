@@ -413,7 +413,9 @@ class Repository:
                      COALESCE(SUM(u.prompt_tokens), 0) AS prompt_tokens,
                      COALESCE(SUM(u.completion_tokens), 0) AS completion_tokens,
                      COALESCE(SUM(u.total_tokens), 0) AS total_tokens,
-                     COALESCE(AVG(u.elapsed_ms), 0) AS avg_latency_ms
+                     COALESCE(AVG(u.elapsed_ms), 0) AS avg_latency_ms,
+                     SUM(CASE WHEN u.estimated_cost_micros IS NOT NULL THEN 1 ELSE 0 END) AS priced_calls,
+                     SUM(CASE WHEN u.estimated_cost_micros IS NULL THEN 1 ELSE 0 END) AS unpriced_calls
                    FROM usage_records u
                    WHERE {where}""",
                 params,
@@ -497,7 +499,17 @@ class Repository:
                    ORDER BY day""",
                 params,
             ).fetchall()
+            costs = self._cost_breakdown(connection, where, params)
+            tenant_costs = self._cost_breakdown(connection, where, params, "u.tenant_id")
+            application_costs = self._cost_breakdown(connection, where, params, "u.application_id")
+            provider_costs = self._cost_breakdown(connection, where, params, "u.provider_id")
+            model_costs = self._cost_breakdown(
+                connection, where, params, "u.provider_id || '\\0' || u.remote_model"
+            )
+            day_costs = self._cost_breakdown(connection, where, params, "date(u.created_at)")
+            quota_status = self._quota_statuses(connection)
             filter_options = self._usage_filter_options(connection, days)
+
         active_filters = {
             key: value
             for key, value in {
@@ -508,6 +520,64 @@ class Repository:
             }.items()
             if value
         }
+        tenant_rows = [
+            {
+                **self._usage_group_row(row, "tenant_id", "tenant_name"),
+                **tenant_costs.get(row["tenant_id"], self._empty_cost_summary()),
+                "quota": quota_status["tenant"].get(row["tenant_id"]),
+            }
+            for row in by_tenant
+        ]
+        application_rows = [
+            {
+                **self._usage_group_row(row, "application_id", "application_name"),
+                "tenant_id": row["tenant_id"],
+                **application_costs.get(row["application_id"], self._empty_cost_summary()),
+                "quota": quota_status["application"].get(row["application_id"]),
+            }
+            for row in by_application
+        ]
+        provider_rows = [
+            {
+                **self._usage_group_row(row, "provider_id", "provider_name"),
+                "avg_latency_ms": round(float(row["avg_latency_ms"] or 0), 1),
+                **provider_costs.get(row["provider_id"], self._empty_cost_summary()),
+            }
+            for row in by_provider
+        ]
+        model_rows = [
+            {
+                "remote_model": row["remote_model"],
+                "provider_id": row["provider_id"],
+                "calls": int(row["calls"]),
+                "prompt_tokens": int(row["prompt_tokens"]),
+                "completion_tokens": int(row["completion_tokens"]),
+                "total_tokens": int(row["total_tokens"]),
+                "avg_latency_ms": round(float(row["avg_latency_ms"] or 0), 1),
+                **model_costs.get(
+                    f"{row['provider_id']}\0{row['remote_model']}",
+                    self._empty_cost_summary(),
+                ),
+            }
+            for row in by_model
+        ]
+        day_rows = [
+            {
+                "day": row["day"],
+                "calls": int(row["calls"]),
+                "prompt_tokens": int(row["prompt_tokens"]),
+                "completion_tokens": int(row["completion_tokens"]),
+                "total_tokens": int(row["total_tokens"]),
+                **day_costs.get(row["day"], self._empty_cost_summary()),
+            }
+            for row in by_day
+        ]
+        selected_quota = None
+        if application_id:
+            selected_quota = quota_status["application"].get(application_id)
+        elif tenant_id:
+            selected_quota = quota_status["tenant"].get(tenant_id)
+
         return {
             "days": days,
             "filters": active_filters,
@@ -517,43 +587,16 @@ class Repository:
             "completion_tokens": int(totals["completion_tokens"] or 0),
             "total_tokens": int(totals["total_tokens"] or 0),
             "avg_latency_ms": round(float(totals["avg_latency_ms"] or 0), 1),
-            "by_tenant": [self._usage_group_row(row, "tenant_id", "tenant_name") for row in by_tenant],
-            "by_application": [
-                {
-                    **self._usage_group_row(row, "application_id", "application_name"),
-                    "tenant_id": row["tenant_id"],
-                }
-                for row in by_application
-            ],
-            "by_provider": [
-                {
-                    **self._usage_group_row(row, "provider_id", "provider_name"),
-                    "avg_latency_ms": round(float(row["avg_latency_ms"] or 0), 1),
-                }
-                for row in by_provider
-            ],
-            "by_model": [
-                {
-                    "remote_model": row["remote_model"],
-                    "provider_id": row["provider_id"],
-                    "calls": int(row["calls"]),
-                    "prompt_tokens": int(row["prompt_tokens"]),
-                    "completion_tokens": int(row["completion_tokens"]),
-                    "total_tokens": int(row["total_tokens"]),
-                    "avg_latency_ms": round(float(row["avg_latency_ms"] or 0), 1),
-                }
-                for row in by_model
-            ],
-            "by_day": [
-                {
-                    "day": row["day"],
-                    "calls": int(row["calls"]),
-                    "prompt_tokens": int(row["prompt_tokens"]),
-                    "completion_tokens": int(row["completion_tokens"]),
-                    "total_tokens": int(row["total_tokens"]),
-                }
-                for row in by_day
-            ],
+            "priced_calls": int(totals["priced_calls"] or 0),
+            "unpriced_calls": int(totals["unpriced_calls"] or 0),
+            **costs,
+            "quota_period": quota_status["period"],
+            "selected_quota": selected_quota,
+            "by_tenant": tenant_rows,
+            "by_application": application_rows,
+            "by_provider": provider_rows,
+            "by_model": model_rows,
+            "by_day": day_rows,
         }
 
     @staticmethod
@@ -566,6 +609,164 @@ class Repository:
             "completion_tokens": int(row["completion_tokens"]),
             "total_tokens": int(row["total_tokens"]),
         }
+
+    @staticmethod
+    def _empty_cost_summary() -> dict:
+        return {
+            "estimated_costs": [],
+            "priced_calls": 0,
+            "unpriced_calls": 0,
+        }
+
+    @staticmethod
+    def _cost_breakdown(connection, where: str, params: tuple, group_expression: str | None = None):
+        group_select = f"{group_expression} AS group_key, " if group_expression else ""
+        group_by = f"GROUP BY group_key, u.cost_currency" if group_expression else "GROUP BY u.cost_currency"
+        rows = connection.execute(
+            f"""SELECT
+                 {group_select}
+                 u.cost_currency,
+                 COALESCE(SUM(u.estimated_cost_micros), 0) AS cost_micros,
+                 SUM(CASE WHEN u.estimated_cost_micros IS NOT NULL THEN 1 ELSE 0 END) AS priced_calls,
+                 SUM(CASE WHEN u.estimated_cost_micros IS NULL THEN 1 ELSE 0 END) AS unpriced_calls
+               FROM usage_records u
+               WHERE {where}
+               {group_by}""",
+            params,
+        ).fetchall()
+
+        def build(items) -> dict:
+            costs = [
+                {
+                    "currency": row["cost_currency"],
+                    "micros": int(row["cost_micros"] or 0),
+                    "amount": round(int(row["cost_micros"] or 0) / 1_000_000, 6),
+                }
+                for row in items
+                if row["cost_currency"] is not None and int(row["priced_calls"] or 0) > 0
+            ]
+            return {
+                "estimated_costs": costs,
+                "priced_calls": sum(int(row["priced_calls"] or 0) for row in items),
+                "unpriced_calls": sum(int(row["unpriced_calls"] or 0) for row in items),
+            }
+
+        if group_expression is None:
+            return build(rows)
+        grouped: dict[str, list] = {}
+        for row in rows:
+            key = row["group_key"]
+            if key is None:
+                key = "unknown"
+            grouped.setdefault(str(key), []).append(row)
+        return {key: build(items) for key, items in grouped.items()}
+
+    def _quota_statuses(self, connection) -> dict:
+        now = datetime.now(timezone.utc)
+        period_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+        if now.month == 12:
+            period_end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
+        else:
+            period_end = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
+        start = period_start.isoformat(timespec="seconds")
+        end = period_end.isoformat(timespec="seconds")
+
+        policies = connection.execute(
+            """SELECT scope_type, scope_id, token_limit, cost_limit_micros,
+                      currency, updated_at
+               FROM quota_policies"""
+        ).fetchall()
+        token_rows = connection.execute(
+            """SELECT tenant_id, application_id, COALESCE(SUM(total_tokens), 0) AS used_tokens
+               FROM usage_records
+               WHERE datetime(created_at) >= datetime(?)
+                 AND datetime(created_at) < datetime(?)
+               GROUP BY tenant_id, application_id""",
+            (start, end),
+        ).fetchall()
+        cost_rows = connection.execute(
+            """SELECT tenant_id, application_id, cost_currency,
+                      COALESCE(SUM(estimated_cost_micros), 0) AS used_cost_micros,
+                      SUM(CASE WHEN estimated_cost_micros IS NULL THEN 1 ELSE 0 END) AS unpriced_calls
+               FROM usage_records
+               WHERE datetime(created_at) >= datetime(?)
+                 AND datetime(created_at) < datetime(?)
+               GROUP BY tenant_id, application_id, cost_currency""",
+            (start, end),
+        ).fetchall()
+
+        tenant_tokens: dict[str, int] = {}
+        app_tokens: dict[str, int] = {}
+        for row in token_rows:
+            tenant_tokens[row["tenant_id"]] = tenant_tokens.get(row["tenant_id"], 0) + int(row["used_tokens"] or 0)
+            app_tokens[row["application_id"]] = app_tokens.get(row["application_id"], 0) + int(row["used_tokens"] or 0)
+
+        tenant_costs: dict[str, dict[str, int]] = {}
+        app_costs: dict[str, dict[str, int]] = {}
+        tenant_unpriced: dict[str, int] = {}
+        app_unpriced: dict[str, int] = {}
+        for row in cost_rows:
+            currency = row["cost_currency"]
+            if currency is not None:
+                tenant_costs.setdefault(row["tenant_id"], {})[currency] = (
+                    tenant_costs.setdefault(row["tenant_id"], {}).get(currency, 0)
+                    + int(row["used_cost_micros"] or 0)
+                )
+                app_costs.setdefault(row["application_id"], {})[currency] = (
+                    app_costs.setdefault(row["application_id"], {}).get(currency, 0)
+                    + int(row["used_cost_micros"] or 0)
+                )
+            unpriced = int(row["unpriced_calls"] or 0)
+            tenant_unpriced[row["tenant_id"]] = tenant_unpriced.get(row["tenant_id"], 0) + unpriced
+            app_unpriced[row["application_id"]] = app_unpriced.get(row["application_id"], 0) + unpriced
+
+        result = {
+            "period": {"type": "calendar_month", "start": start, "end": end},
+            "tenant": {},
+            "application": {},
+        }
+        for policy in policies:
+            scope_type = policy["scope_type"]
+            scope_id = policy["scope_id"]
+            currency = policy["currency"] or "USD"
+            if scope_type == "tenant":
+                used_tokens = tenant_tokens.get(scope_id, 0)
+                used_cost = tenant_costs.get(scope_id, {}).get(currency, 0)
+                unpriced_calls = tenant_unpriced.get(scope_id, 0)
+            else:
+                used_tokens = app_tokens.get(scope_id, 0)
+                used_cost = app_costs.get(scope_id, {}).get(currency, 0)
+                unpriced_calls = app_unpriced.get(scope_id, 0)
+            token_limit = policy["token_limit"]
+            cost_limit = policy["cost_limit_micros"]
+            token_remaining = None if token_limit is None else max(0, int(token_limit) - used_tokens)
+            cost_remaining = None if cost_limit is None else max(0, int(cost_limit) - used_cost)
+            result[scope_type][scope_id] = {
+                "configured": True,
+                "scope_type": scope_type,
+                "scope_id": scope_id,
+                "currency": currency,
+                "token_limit": token_limit,
+                "used_tokens": used_tokens,
+                "remaining_tokens": token_remaining,
+                "token_utilization_percent": (
+                    None if token_limit in (None, 0)
+                    else round(used_tokens * 100 / int(token_limit), 2)
+                ),
+                "cost_limit_micros": cost_limit,
+                "cost_limit": None if cost_limit is None else round(int(cost_limit) / 1_000_000, 6),
+                "used_cost_micros": used_cost,
+                "used_cost": round(used_cost / 1_000_000, 6),
+                "remaining_cost_micros": cost_remaining,
+                "remaining_cost": None if cost_remaining is None else round(cost_remaining / 1_000_000, 6),
+                "cost_utilization_percent": (
+                    None if cost_limit in (None, 0)
+                    else round(used_cost * 100 / int(cost_limit), 2)
+                ),
+                "unpriced_calls": unpriced_calls,
+                "cost_complete": unpriced_calls == 0,
+            }
+        return result
 
     @staticmethod
     def _usage_where(
