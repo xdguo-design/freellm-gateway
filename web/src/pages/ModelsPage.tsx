@@ -209,7 +209,18 @@ export function ModelsPage({
 
   async function ensureProvider(provider: ProviderDraft) {
     const existing = providers.find((item) => item.id === provider.id);
-    if (existing) return existing;
+    if (existing) {
+      let sameConnection = false;
+      try {
+        sameConnection = connectionKey(existing) === connectionKey(provider);
+      } catch {
+        sameConnection = false;
+      }
+      if (!sameConnection) {
+        throw new Error("Provider ID 已被另一个协议/Base URL 占用，请修改自定义 Provider ID。");
+      }
+      return existing;
+    }
     return api<Provider>("/api/admin/providers", { method: "POST", body: providerPayload(provider) });
   }
 
