@@ -9,7 +9,7 @@ class ConnectionLogger:
 
     _SAFE_FIELDS = frozenset({
         "request_id", "requested_model", "capability", "stream", "attempt",
-        "tenant_id", "application_id", "provider_id", "remote_model",
+        "tenant_id", "application_id", "route_id", "provider_id", "remote_model",
         "status", "elapsed_ms", "usage", "error_kind",
     })
 
