@@ -41,6 +41,9 @@ class ModelRoute:
     free_summary: str | None = None
     catalog_status: str = "draft"
     reasoning_effort: str | None = None
+    input_price_per_million: float | None = None
+    output_price_per_million: float | None = None
+    pricing_currency: str = "USD"
 
 
 
@@ -70,10 +73,21 @@ class RequestIdentity:
 
 
 @dataclass(frozen=True)
+class QuotaPolicy:
+    scope_type: str
+    scope_id: str
+    token_limit: int | None = None
+    cost_limit_micros: int | None = None
+    currency: str = "USD"
+    updated_at: str | None = None
+
+
+@dataclass(frozen=True)
 class UsageRecord:
     request_id: str
     tenant_id: str
     application_id: str
+    route_id: str | None
     provider_id: str | None
     remote_model: str | None
     prompt_tokens: int
@@ -82,4 +96,6 @@ class UsageRecord:
     elapsed_ms: int
     stream: bool
     status: str
+    estimated_cost_micros: int | None
+    cost_currency: str | None
     created_at: str
