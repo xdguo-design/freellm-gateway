@@ -449,7 +449,9 @@ class Repository:
                     "tenant_id": tenant_id,
                     "application_id": application_id,
                     "projected_tokens": projected_tokens,
-                    "projected_costs": projected_costs,
+                    "projected_costs": (
+                        projected_costs if cost_projection_complete else {}
+                    ),
                 }
             return {
                 "allowed": True,
