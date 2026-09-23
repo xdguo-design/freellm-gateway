@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, getAdminToken, setAdminToken } from "./api/client";
 import { Shell, type ViewKey } from "./components/Shell";
+import { useI18n } from "./i18n";
 import { CatalogPage } from "./pages/CatalogPage";
 import { ModelsPage } from "./pages/ModelsPage";
 import { OverviewPage } from "./pages/OverviewPage";
@@ -15,6 +16,7 @@ function initialView(): ViewKey {
 }
 
 export default function App() {
+  const { t, errorText } = useI18n();
   const [view, setView] = useState<ViewKey>(initialView);
   const [token, setTokenState] = useState(getAdminToken);
   const [overview, setOverview] = useState<Overview | null>(null);
@@ -46,9 +48,9 @@ export default function App() {
       setError("");
     } catch (reason) {
       setOnline(false);
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(errorText(reason));
     }
-  }, []);
+  }, [errorText]);
 
   useEffect(() => { void refresh(); }, [refresh]);
   useEffect(() => {
@@ -77,7 +79,7 @@ export default function App() {
 
   return (
     <Shell view={view} onView={changeView} online={online} onRefresh={() => void refresh()} token={token} onToken={changeToken}>
-      {error && <div className="notice bad">{error}<small>远程访问时请填写 Admin Token；loopback 默认无需 Token。</small></div>}
+      {error && <div className="notice bad">{error}<small>{t("app.remoteHint")}</small></div>}
       {page}
     </Shell>
   );
