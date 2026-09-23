@@ -504,7 +504,7 @@ class Repository:
             application_costs = self._cost_breakdown(connection, where, params, "u.application_id")
             provider_costs = self._cost_breakdown(connection, where, params, "u.provider_id")
             model_costs = self._cost_breakdown(
-                connection, where, params, "u.provider_id || '\\0' || u.remote_model"
+                connection, where, params, "u.provider_id || '::' || u.remote_model"
             )
             day_costs = self._cost_breakdown(connection, where, params, "date(u.created_at)")
             quota_status = self._quota_statuses(connection)
@@ -555,7 +555,7 @@ class Repository:
                 "total_tokens": int(row["total_tokens"]),
                 "avg_latency_ms": round(float(row["avg_latency_ms"] or 0), 1),
                 **model_costs.get(
-                    f"{row['provider_id']}\0{row['remote_model']}",
+                    f"{row['provider_id']}::{row['remote_model']}",
                     self._empty_cost_summary(),
                 ),
             }
@@ -687,6 +687,7 @@ class Repository:
         cost_rows = connection.execute(
             """SELECT tenant_id, application_id, cost_currency,
                       COALESCE(SUM(estimated_cost_micros), 0) AS used_cost_micros,
+                      SUM(CASE WHEN estimated_cost_micros IS NOT NULL THEN 1 ELSE 0 END) AS priced_calls,
                       SUM(CASE WHEN estimated_cost_micros IS NULL THEN 1 ELSE 0 END) AS unpriced_calls
                FROM usage_records
                WHERE datetime(created_at) >= datetime(?)
@@ -705,6 +706,8 @@ class Repository:
         app_costs: dict[str, dict[str, int]] = {}
         tenant_unpriced: dict[str, int] = {}
         app_unpriced: dict[str, int] = {}
+        tenant_priced_by_currency: dict[str, dict[str, int]] = {}
+        app_priced_by_currency: dict[str, dict[str, int]] = {}
         for row in cost_rows:
             currency = row["cost_currency"]
             if currency is not None:
@@ -715,6 +718,14 @@ class Repository:
                 app_costs.setdefault(row["application_id"], {})[currency] = (
                     app_costs.setdefault(row["application_id"], {}).get(currency, 0)
                     + int(row["used_cost_micros"] or 0)
+                )
+                tenant_priced_by_currency.setdefault(row["tenant_id"], {})[currency] = (
+                    tenant_priced_by_currency.setdefault(row["tenant_id"], {}).get(currency, 0)
+                    + int(row["priced_calls"] or 0)
+                )
+                app_priced_by_currency.setdefault(row["application_id"], {})[currency] = (
+                    app_priced_by_currency.setdefault(row["application_id"], {}).get(currency, 0)
+                    + int(row["priced_calls"] or 0)
                 )
             unpriced = int(row["unpriced_calls"] or 0)
             tenant_unpriced[row["tenant_id"]] = tenant_unpriced.get(row["tenant_id"], 0) + unpriced
@@ -733,10 +744,16 @@ class Repository:
                 used_tokens = tenant_tokens.get(scope_id, 0)
                 used_cost = tenant_costs.get(scope_id, {}).get(currency, 0)
                 unpriced_calls = tenant_unpriced.get(scope_id, 0)
+                priced_by_currency = tenant_priced_by_currency.get(scope_id, {})
             else:
                 used_tokens = app_tokens.get(scope_id, 0)
                 used_cost = app_costs.get(scope_id, {}).get(currency, 0)
                 unpriced_calls = app_unpriced.get(scope_id, 0)
+                priced_by_currency = app_priced_by_currency.get(scope_id, {})
+            other_currency_calls = sum(
+                count for cost_currency, count in priced_by_currency.items()
+                if cost_currency != currency
+            )
             token_limit = policy["token_limit"]
             cost_limit = policy["cost_limit_micros"]
             token_remaining = None if token_limit is None else max(0, int(token_limit) - used_tokens)
@@ -764,7 +781,8 @@ class Repository:
                     else round(used_cost * 100 / int(cost_limit), 2)
                 ),
                 "unpriced_calls": unpriced_calls,
-                "cost_complete": unpriced_calls == 0,
+                "other_currency_calls": other_currency_calls,
+                "cost_complete": unpriced_calls == 0 and other_currency_calls == 0,
             }
         return result
 
