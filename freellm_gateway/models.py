@@ -3,6 +3,7 @@ from enum import Enum
 
 
 SUPPORTED_PROVIDER_PROTOCOLS = frozenset({"openai", "anthropic", "gemini"})
+SUPPORTED_CATALOG_STATUSES = frozenset({"draft", "published"})
 
 
 class HealthStatus(str, Enum):
