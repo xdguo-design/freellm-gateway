@@ -23,6 +23,15 @@ class UsageAdapter:
         }
 
 
+class CountingUsageAdapter(UsageAdapter):
+    def __init__(self):
+        self.complete_calls = 0
+
+    async def complete(self, payload):
+        self.complete_calls += 1
+        return await super().complete(payload)
+
+
 class StreamingUsageAdapter:
     async def stream(self, payload):
         yield (
@@ -553,6 +562,228 @@ def test_route_pricing_can_be_updated_through_admin_api(tmp_path):
     assert stored.pricing_currency == "USD"
 
 
+def test_request_is_rejected_before_provider_when_application_token_quota_would_be_exceeded(tmp_path):
+    adapter = CountingUsageAdapter()
+    client, _ = make_usage_client(tmp_path, adapter)
+    client.post(
+        "/api/admin/tenants",
+        headers=admin_headers(),
+        json={"id": "tenant-hard", "name": "Tenant Hard"},
+    )
+    key = client.post(
+        "/api/admin/applications",
+        headers=admin_headers(),
+        json={"id": "app-hard", "tenant_id": "tenant-hard", "name": "App Hard"},
+    ).json()["api_key"]
+    client.put(
+        "/api/admin/quotas/tenant/tenant-hard",
+        headers=admin_headers(),
+        json={"token_limit": 10000, "currency": "USD"},
+    )
+    client.put(
+        "/api/admin/quotas/application/app-hard",
+        headers=admin_headers(),
+        json={"token_limit": 1, "currency": "USD"},
+    )
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": "remote-model",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 1,
+        },
+    )
+
+    assert response.status_code == 429
+    detail = response.json()["detail"]
+    assert detail["code"] == "quota_exceeded"
+    assert detail["scope_type"] == "application"
+    assert detail["scope_id"] == "app-hard"
+    assert detail["resource"] == "tokens"
+    assert response.headers["x-freellm-quota-scope"] == "application"
+    assert response.headers["x-freellm-quota-resource"] == "tokens"
+    assert "retry-after" in response.headers
+    assert adapter.complete_calls == 0
+
+
+def test_cost_quota_uses_projected_route_price_before_provider_call(tmp_path):
+    adapter = CountingUsageAdapter()
+    client, _ = make_usage_client(
+        tmp_path,
+        adapter,
+        input_price_per_million=100.0,
+        output_price_per_million=100.0,
+        pricing_currency="USD",
+    )
+    client.post(
+        "/api/admin/tenants",
+        headers=admin_headers(),
+        json={"id": "tenant-cost-hard", "name": "Tenant Cost Hard"},
+    )
+    key = client.post(
+        "/api/admin/applications",
+        headers=admin_headers(),
+        json={
+            "id": "app-cost-hard",
+            "tenant_id": "tenant-cost-hard",
+            "name": "App Cost Hard",
+        },
+    ).json()["api_key"]
+    client.put(
+        "/api/admin/quotas/application/app-cost-hard",
+        headers=admin_headers(),
+        json={"cost_limit": 0.000001, "currency": "USD"},
+    )
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": "remote-model",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 1,
+        },
+    )
+
+    assert response.status_code == 429
+    detail = response.json()["detail"]
+    assert detail["resource"] == "cost"
+    assert detail["scope_type"] == "application"
+    assert detail["projection_complete"] is True
+    assert detail["projected_micros"] > detail["limit_micros"]
+    assert adapter.complete_calls == 0
+
+
+def test_warning_threshold_is_returned_in_success_headers(tmp_path):
+    client, repository = make_usage_client(tmp_path, UsageAdapter())
+    client.post(
+        "/api/admin/tenants",
+        headers=admin_headers(),
+        json={"id": "tenant-warning", "name": "Tenant Warning"},
+    )
+    key = client.post(
+        "/api/admin/applications",
+        headers=admin_headers(),
+        json={
+            "id": "app-warning",
+            "tenant_id": "tenant-warning",
+            "name": "App Warning",
+        },
+    ).json()["api_key"]
+    quota = client.put(
+        "/api/admin/quotas/application/app-warning",
+        headers=admin_headers(),
+        json={
+            "token_limit": 10000,
+            "currency": "USD",
+            "warning_threshold_percent": 0,
+        },
+    )
+    assert quota.status_code == 200
+    assert quota.json()["data"]["warning_threshold_percent"] == 0
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": "remote-model",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    warning = response.headers["x-freellm-quota-warning"]
+    assert "application:app-warning:tokens:" in warning
+    assert response.headers["x-freellm-quota-warning-count"] == "1"
+    quota_status = repository.usage_summary(
+        7, tenant_id="tenant-warning", application_id="app-warning"
+    )["selected_quota"]
+    assert quota_status["warning_threshold_percent"] == 0
+    assert quota_status["token_warning"] is True
+
+
+def test_pending_reservation_prevents_concurrent_quota_oversubscription(tmp_path):
+    repository = Repository(Database(tmp_path / "gateway.sqlite3"))
+    repository.initialize()
+    repository.create_tenant("tenant-reserve", "Tenant Reserve")
+    repository.create_application("app-reserve", "tenant-reserve", "App Reserve")
+    repository.save_quota_policy(
+        "application",
+        "app-reserve",
+        token_limit=100,
+        warning_threshold_percent=80,
+    )
+
+    first = repository.reserve_quota(
+        "tenant-reserve",
+        "app-reserve",
+        projected_tokens=60,
+    )
+    second = repository.reserve_quota(
+        "tenant-reserve",
+        "app-reserve",
+        projected_tokens=50,
+    )
+
+    assert first["allowed"] is True
+    assert first["reservation_id"]
+    assert second["allowed"] is False
+    assert second["violation"]["resource"] == "tokens"
+
+    repository.release_quota_reservation(first["reservation_id"])
+    third = repository.reserve_quota(
+        "tenant-reserve",
+        "app-reserve",
+        projected_tokens=50,
+    )
+    assert third["allowed"] is True
+    repository.release_quota_reservation(third["reservation_id"])
+
+
+def test_streaming_request_releases_quota_reservation(tmp_path):
+    client, repository = make_usage_client(tmp_path, StreamingUsageAdapter())
+    client.post(
+        "/api/admin/tenants",
+        headers=admin_headers(),
+        json={"id": "tenant-stream-quota", "name": "Tenant Stream Quota"},
+    )
+    key = client.post(
+        "/api/admin/applications",
+        headers=admin_headers(),
+        json={
+            "id": "app-stream-quota",
+            "tenant_id": "tenant-stream-quota",
+            "name": "App Stream Quota",
+        },
+    ).json()["api_key"]
+    client.put(
+        "/api/admin/quotas/application/app-stream-quota",
+        headers=admin_headers(),
+        json={"token_limit": 1000, "warning_threshold_percent": 0},
+    )
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": "remote-model",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+            "max_tokens": 10,
+        },
+    )
+
+    assert response.status_code == 200
+    assert "data: [DONE]" in response.text
+    assert "application:app-stream-quota:tokens:" in response.headers[
+        "x-freellm-quota-warning"
+    ]
+    assert repository._quota_reservations == {}
+
+
 def test_existing_usage_database_is_migrated_with_identity_defaults(tmp_path):
     path = tmp_path / "legacy.sqlite3"
     connection = sqlite3.connect(path)
@@ -615,5 +846,6 @@ def test_admin_page_contains_usage_dimension_filters_and_summaries(tmp_path):
     assert 'id="usage-application-rows"' in response.text
     assert 'id="usage-cost"' in response.text
     assert 'id="quota-form"' in response.text
+    assert 'name="warning_threshold_percent"' in response.text
     assert "/api/admin/usage?" in response.text
     assert "/api/admin/quotas" in response.text
