@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { useI18n } from "../i18n";
 
 export type ViewKey = "overview" | "models" | "usage" | "routing" | "catalog" | "settings";
@@ -31,6 +31,10 @@ export function Shell({
 }) {
   const { language, setLanguage, t } = useI18n();
   const titleKey = items.find(([key]) => key === view)?.[1] ?? "nav.overview";
+  const title = t(titleKey);
+  useEffect(() => {
+    document.title = `${title} · FreeLLM Gateway`;
+  }, [title]);
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -46,7 +50,7 @@ export function Shell({
       </aside>
       <main>
         <header className="topbar">
-          <div><p className="eyebrow">GATEWAY / {view.toUpperCase()}</p><h1>{t(titleKey)}</h1></div>
+          <div><p className="eyebrow">GATEWAY / {view.toUpperCase()}</p><h1>{title}</h1></div>
           <div className="top-actions">
             <div className="language-switch" role="group" aria-label="Language">
               <button className={language === "zh" ? "active" : ""} onClick={() => setLanguage("zh")}>{t("lang.zh")}</button>
