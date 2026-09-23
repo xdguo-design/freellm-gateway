@@ -288,9 +288,9 @@ export function ModelsPage({
       method: "POST",
       body: {
         provider: providerPayload(provider),
-        models: modelOptions.map((remote_model) => ({
+        models: selectedModels.map((remote_model) => ({
           remote_model,
-          enabled: selectedModels.includes(remote_model),
+          enabled: true,
         })),
         ...routeCommonPayload(),
         ...(draft.credential.trim() ? { credential: draft.credential.trim() } : {}),
@@ -304,6 +304,28 @@ export function ModelsPage({
     if (action === "probe") await api(`/api/admin/routes/${encodeURIComponent(route.id)}/probe`, { method: "POST" });
     if (action === "toggle") await api(`/api/admin/routes/${encodeURIComponent(route.id)}`, { method: "PATCH", body: { enabled: !route.enabled } });
     if (action === "delete") await api(`/api/admin/routes/${encodeURIComponent(route.id)}`, { method: "DELETE" });
+    await onRefresh();
+  }
+
+  async function probeAll() {
+    let rateLimitStreak = 0;
+    let checked = 0;
+    for (const route of ordered) {
+      try {
+        await api(`/api/admin/routes/${encodeURIComponent(route.id)}/probe`, { method: "POST" });
+        rateLimitStreak = 0;
+        checked += 1;
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        rateLimitStreak = text.includes("rate_limit") ? rateLimitStreak + 1 : 0;
+        if (rateLimitStreak >= 3) {
+          setMessage(`连续 3 个 Provider 返回 rate limit，已停止批量探测；完成 ${checked} 个。`);
+          await onRefresh();
+          return;
+        }
+      }
+    }
+    setMessage(`批量探测完成：${checked} 个路由。`);
     await onRefresh();
   }
 
@@ -394,7 +416,7 @@ export function ModelsPage({
       <section className="card">
         <div className="section-head">
           <div><h2>模型池</h2><p>Provider、连接、能力、优先级、价格和健康状态在一个页面管理。</p></div>
-          <div className="actions"><button onClick={() => void Promise.all(ordered.map((route) => mutate(route, "probe")))}>全部探测</button><button className="primary" onClick={() => { setEditing(null); setDraft(blankRoute()); }}>添加模型</button></div>
+          <div className="actions"><button onClick={() => void probeAll()}>全部探测</button><button className="primary" onClick={() => { setEditing(null); setDraft(blankRoute()); }}>添加模型</button></div>
         </div>
         <div className="table-wrap"><table><thead><tr><th>#</th><th>模型</th><th>Provider</th><th>能力</th><th>价格 / 1M</th><th>状态</th><th>操作</th></tr></thead>
           <tbody>{ordered.map((route, index) => <tr key={route.id}>
@@ -429,7 +451,12 @@ export function ModelsPage({
         <form className="card form-card" onSubmit={saveRoute}>
           <div className="section-head"><div><h2>{editing ? "编辑模型" : "添加模型 / 批量模型"}</h2><p>自定义 Provider 可在保存前用临时 API Key 验证，不会把 Key 回显到页面。</p></div><button type="button" onClick={() => { setDraft((current) => ({ ...current, provider_id: CUSTOM_PROVIDER_ID })); setCustomProvider(atomGitPreset()); }}>AtomGit 本机预设</button></div>
           <div className="form-grid">
-            <label>Provider<select required value={draft.provider_id} onChange={(event) => setDraft({ ...draft, provider_id: event.target.value })}><option value="">请选择</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.protocol}</option>)}<option value={CUSTOM_PROVIDER_ID}>＋ 自定义 Provider</option></select></label>
+            <label>Provider<select required value={draft.provider_id} onChange={(event) => {
+              const providerId = event.target.value;
+              const provider = providers.find((item) => item.id === providerId);
+              const groqPreset = provider?.name.trim().toLowerCase() === "groq" && !draft.remote_model.trim();
+              setDraft({ ...draft, provider_id: providerId, remote_model: groqPreset ? "openai/gpt-oss-120b" : draft.remote_model });
+            }}><option value="">请选择</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.protocol}</option>)}<option value={CUSTOM_PROVIDER_ID}>＋ 自定义 Provider</option></select></label>
             <label>模型<input list="provider-model-options" required value={draft.remote_model} onChange={(event) => setDraft({ ...draft, remote_model: event.target.value })} /><datalist id="provider-model-options">{modelOptions.map((model) => <option value={model} key={model} />)}</datalist></label>
             <label>显示名<input value={draft.display_name} onChange={(event) => setDraft({ ...draft, display_name: event.target.value })} /></label>
             <label>优先级<input type="number" min={1} value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: Number(event.target.value) })} /></label>
