@@ -201,18 +201,112 @@ class Repository:
             True, row["created_at"],
         )
 
+    def save_quota_policy(
+        self,
+        scope_type: str,
+        scope_id: str,
+        *,
+        token_limit: int | None = None,
+        cost_limit_micros: int | None = None,
+        currency: str = "USD",
+    ) -> QuotaPolicy:
+        if scope_type not in {"tenant", "application"}:
+            raise ValueError("scope_type")
+        if token_limit is not None and token_limit < 0:
+            raise ValueError("token_limit")
+        if cost_limit_micros is not None and cost_limit_micros < 0:
+            raise ValueError("cost_limit_micros")
+        currency = currency.strip().upper()
+        if not currency or len(currency) > 8:
+            raise ValueError("currency")
+        updated_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+        with self.database.connect() as connection:
+            if scope_type == "tenant":
+                target = connection.execute(
+                    "SELECT 1 FROM tenants WHERE id = ?",
+                    (scope_id,),
+                ).fetchone()
+            else:
+                target = connection.execute(
+                    "SELECT 1 FROM applications WHERE id = ?",
+                    (scope_id,),
+                ).fetchone()
+            if target is None:
+                raise KeyError(scope_id)
+            connection.execute(
+                """INSERT INTO quota_policies(
+                   scope_type, scope_id, token_limit, cost_limit_micros, currency, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(scope_type, scope_id) DO UPDATE SET
+                     token_limit=excluded.token_limit,
+                     cost_limit_micros=excluded.cost_limit_micros,
+                     currency=excluded.currency,
+                     updated_at=excluded.updated_at""",
+                (scope_type, scope_id, token_limit, cost_limit_micros, currency, updated_at),
+            )
+        return QuotaPolicy(
+            scope_type,
+            scope_id,
+            token_limit,
+            cost_limit_micros,
+            currency,
+            updated_at,
+        )
+
+    def list_quota_policies(self) -> list[QuotaPolicy]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """SELECT scope_type, scope_id, token_limit, cost_limit_micros,
+                          currency, updated_at
+                   FROM quota_policies
+                   ORDER BY scope_type, scope_id"""
+            ).fetchall()
+        return [
+            QuotaPolicy(
+                row["scope_type"],
+                row["scope_id"],
+                row["token_limit"],
+                row["cost_limit_micros"],
+                row["currency"],
+                row["updated_at"],
+            )
+            for row in rows
+        ]
+
+    def quota_policy(self, scope_type: str, scope_id: str) -> QuotaPolicy | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                """SELECT scope_type, scope_id, token_limit, cost_limit_micros,
+                          currency, updated_at
+                   FROM quota_policies
+                   WHERE scope_type = ? AND scope_id = ?""",
+                (scope_type, scope_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return QuotaPolicy(
+            row["scope_type"],
+            row["scope_id"],
+            row["token_limit"],
+            row["cost_limit_micros"],
+            row["currency"],
+            row["updated_at"],
+        )
+
     def save_usage_record(self, record: UsageRecord) -> None:
         with self.database.connect() as connection:
             connection.execute(
                 """INSERT INTO usage_records(
-                   request_id, tenant_id, application_id, provider_id, remote_model,
-                   prompt_tokens, completion_tokens, total_tokens, elapsed_ms,
-                   stream, status, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   request_id, tenant_id, application_id, route_id, provider_id,
+                   remote_model, prompt_tokens, completion_tokens, total_tokens,
+                   elapsed_ms, stream, status, estimated_cost_micros,
+                   cost_currency, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     record.request_id,
                     record.tenant_id,
                     record.application_id,
+                    record.route_id,
                     record.provider_id,
                     record.remote_model,
                     record.prompt_tokens,
@@ -221,6 +315,8 @@ class Repository:
                     record.elapsed_ms,
                     int(record.stream),
                     record.status,
+                    record.estimated_cost_micros,
+                    record.cost_currency,
                     record.created_at,
                 ),
             )
@@ -237,10 +333,17 @@ class Repository:
         prompt = prompt_tokens if isinstance(prompt_tokens, int) else 0
         completion = completion_tokens if isinstance(completion_tokens, int) else 0
         total = total_tokens if isinstance(total_tokens, int) else prompt + completion
+        route_id = entry.get("route_id") if isinstance(entry.get("route_id"), str) else None
+        estimated_cost_micros, cost_currency = self._estimate_usage_cost(
+            route_id,
+            max(0, prompt),
+            max(0, completion),
+        )
         record = UsageRecord(
             request_id=str(entry.get("request_id") or ""),
             tenant_id=str(entry.get("tenant_id") or "system"),
             application_id=str(entry.get("application_id") or "legacy-global"),
+            route_id=route_id,
             provider_id=entry.get("provider_id") if isinstance(entry.get("provider_id"), str) else None,
             remote_model=entry.get("remote_model") if isinstance(entry.get("remote_model"), str) else None,
             prompt_tokens=max(0, prompt),
@@ -249,10 +352,42 @@ class Repository:
             elapsed_ms=max(0, int(entry.get("elapsed_ms") or 0)),
             stream=bool(entry.get("stream")),
             status=str(entry.get("status") or "unknown"),
+            estimated_cost_micros=estimated_cost_micros,
+            cost_currency=cost_currency,
             created_at=datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
         )
         self.save_usage_record(record)
         return record
+
+    def _estimate_usage_cost(
+        self,
+        route_id: str | None,
+        prompt_tokens: int,
+        completion_tokens: int,
+    ) -> tuple[int | None, str | None]:
+        if route_id is None:
+            return None, None
+        with self.database.connect() as connection:
+            route = connection.execute(
+                """SELECT input_price_per_million, output_price_per_million,
+                          pricing_currency
+                   FROM routes
+                   WHERE id = ?""",
+                (route_id,),
+            ).fetchone()
+        if route is None:
+            return None, None
+        input_price = route["input_price_per_million"]
+        output_price = route["output_price_per_million"]
+        if prompt_tokens > 0 and input_price is None:
+            return None, None
+        if completion_tokens > 0 and output_price is None:
+            return None, None
+        micros = round(
+            prompt_tokens * float(input_price or 0)
+            + completion_tokens * float(output_price or 0)
+        )
+        return max(0, micros), (route["pricing_currency"] or "USD").upper()
 
     def usage_summary(
         self,
