@@ -492,7 +492,7 @@ export function ModelsPage({
         <form className="card form-card" onSubmit={saveProvider}>
           <div className="section-head"><div><h2>{t("models.providerAddTitle")}</h2><p>{t("models.providerAddDesc")}</p></div></div>
           <ProviderFields value={providerDraft} onChange={setProviderDraft} prefix="provider-form" />
-          <div className="form-actions"><button type="button" onClick={() => setProviderDraft(atomGitPreset())}>AtomGit 预设</button><button className="primary" type="submit">{t("models.saveProvider")}</button></div>
+          <div className="form-actions"><button type="button" onClick={() => setProviderDraft(atomGitPreset())}>{t("models.atomgitPreset")}</button><button className="primary" type="submit">{t("models.saveProvider")}</button></div>
         </form>
       </section>
 
@@ -503,7 +503,7 @@ export function ModelsPage({
             <div className="section-head"><div><h3>{item.provider.name || t("models.newConnection")}</h3><p>{item.status === "validated" ? t("models.validatedModels", { count: item.models.length }) : item.status === "validating" ? t("models.validating") : item.error || t("models.pendingValidation")}</p></div><button className="danger" onClick={() => setMultiConnections((current) => current.filter((candidate) => candidate.key !== item.key))}>{t("models.remove")}</button></div>
             <ProviderFields value={item.provider} onChange={(provider) => updateMulti(item.key, { provider, status: "idle", models: [], selected_models: [] })} prefix={`multi-${item.key}`} />
             <label>API Key<input type="password" value={item.credential} onChange={(event) => updateMulti(item.key, { credential: event.target.value, status: "idle" })} /></label>
-            <div className="form-actions"><button disabled={!item.credential || item.status === "validating"} onClick={() => void validateMulti(item)}>验证并获取模型</button></div>
+            <div className="form-actions"><button disabled={!item.credential || item.status === "validating"} onClick={() => void validateMulti(item)}>{t("models.validateFetch")}</button></div>
             {!!item.models.length && <div className="check-grid compact">{item.models.map((model) => <label key={model}><input type="checkbox" checked={item.selected_models.includes(model)} onChange={(event) => updateMulti(item.key, { selected_models: event.target.checked ? [...item.selected_models, model] : item.selected_models.filter((value) => value !== model) })} />{model}</label>)}</div>}
           </article>)}
         </div>
