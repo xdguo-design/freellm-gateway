@@ -3,6 +3,7 @@ import hmac
 import json
 import secrets
 from datetime import datetime, timezone
+from threading import Lock
 
 from .db import Database
 from .models import Application, HealthStatus, ModelRoute, Provider, QuotaPolicy, Tenant, UsageRecord
@@ -29,6 +30,8 @@ def _hash_app_secret(secret: str, salt: bytes) -> bytes:
 class Repository:
     def __init__(self, database: Database):
         self.database = database
+        self._quota_lock = Lock()
+        self._quota_reservations: dict[str, dict] = {}
 
     def initialize(self) -> None:
         self.database.initialize()
@@ -209,6 +212,7 @@ class Repository:
         token_limit: int | None = None,
         cost_limit_micros: int | None = None,
         currency: str = "USD",
+        warning_threshold_percent: float = 80.0,
     ) -> QuotaPolicy:
         if scope_type not in {"tenant", "application"}:
             raise ValueError("scope_type")
@@ -219,6 +223,9 @@ class Repository:
         currency = currency.strip().upper()
         if not currency or len(currency) > 8:
             raise ValueError("currency")
+        if not 0 <= float(warning_threshold_percent) <= 100:
+            raise ValueError("warning_threshold_percent")
+        warning_threshold_percent = float(warning_threshold_percent)
         updated_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
         with self.database.connect() as connection:
             if scope_type == "tenant":
@@ -235,14 +242,19 @@ class Repository:
                 raise KeyError(scope_id)
             connection.execute(
                 """INSERT INTO quota_policies(
-                   scope_type, scope_id, token_limit, cost_limit_micros, currency, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?)
+                   scope_type, scope_id, token_limit, cost_limit_micros, currency,
+                   warning_threshold_percent, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(scope_type, scope_id) DO UPDATE SET
                      token_limit=excluded.token_limit,
                      cost_limit_micros=excluded.cost_limit_micros,
                      currency=excluded.currency,
+                     warning_threshold_percent=excluded.warning_threshold_percent,
                      updated_at=excluded.updated_at""",
-                (scope_type, scope_id, token_limit, cost_limit_micros, currency, updated_at),
+                (
+                    scope_type, scope_id, token_limit, cost_limit_micros, currency,
+                    warning_threshold_percent, updated_at,
+                ),
             )
         return QuotaPolicy(
             scope_type,
@@ -250,6 +262,7 @@ class Repository:
             token_limit,
             cost_limit_micros,
             currency,
+            warning_threshold_percent,
             updated_at,
         )
 
@@ -257,7 +270,7 @@ class Repository:
         with self.database.connect() as connection:
             rows = connection.execute(
                 """SELECT scope_type, scope_id, token_limit, cost_limit_micros,
-                          currency, updated_at
+                          currency, warning_threshold_percent, updated_at
                    FROM quota_policies
                    ORDER BY scope_type, scope_id"""
             ).fetchall()
@@ -268,6 +281,7 @@ class Repository:
                 row["token_limit"],
                 row["cost_limit_micros"],
                 row["currency"],
+                float(row["warning_threshold_percent"]),
                 row["updated_at"],
             )
             for row in rows
@@ -277,7 +291,7 @@ class Repository:
         with self.database.connect() as connection:
             row = connection.execute(
                 """SELECT scope_type, scope_id, token_limit, cost_limit_micros,
-                          currency, updated_at
+                          currency, warning_threshold_percent, updated_at
                    FROM quota_policies
                    WHERE scope_type = ? AND scope_id = ?""",
                 (scope_type, scope_id),
