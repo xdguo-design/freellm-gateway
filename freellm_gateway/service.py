@@ -365,6 +365,9 @@ class ModelGateway:
                 )
         raise ProviderError("all_providers_failed", 503, "; ".join(str(error) for error in errors), retriable=False)
 
+    def candidates(self, requested_model: str, capability: str) -> list[ModelRoute]:
+        return self._candidates(requested_model, capability)
+
     def _candidates(self, requested_model: str, capability: str) -> list[ModelRoute]:
         now = time.monotonic()
         eligible = [
