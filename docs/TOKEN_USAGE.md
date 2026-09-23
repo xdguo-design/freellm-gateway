@@ -123,3 +123,86 @@ normalized OpenAI-compatible payload contains a `usage` object.
 Existing `usage_records` tables are upgraded in place. Historical records are
 assigned to `system / legacy-global`, preserving old totals while making the
 new dimensions non-null.
+
+## Estimated cost
+
+Each model route can define operator-supplied pricing:
+
+- `input_price_per_million`
+- `output_price_per_million`
+- `pricing_currency`
+
+Prices are expressed as currency units per 1,000,000 tokens.
+
+When a request finishes, the gateway snapshots the estimated cost into the
+usage record. Historical usage is therefore not recalculated when a route's
+price changes later.
+
+The persisted amount uses integer micro-units:
+
+```text
+estimated_cost_micros =
+  prompt_tokens * input_price_per_million
+  + completion_tokens * output_price_per_million
+```
+
+For example, USD 2 / 1M input tokens and USD 4 / 1M output tokens with 12 input
+and 5 output tokens produces 44 micro-USD, or USD 0.000044.
+
+If a request used non-zero input/output tokens but the matching route price is
+missing, the cost is stored as unknown rather than zero. Usage summaries expose
+`priced_calls` and `unpriced_calls`.
+
+Multiple currencies are never added together. Summary responses return
+`estimated_costs` as a list by currency.
+
+## Monthly quotas
+
+Quota policies can be configured at tenant or application scope:
+
+```http
+PUT /api/admin/quotas/tenant/team-a
+{
+  "token_limit": 10000000,
+  "cost_limit": 100,
+  "currency": "USD"
+}
+
+PUT /api/admin/quotas/application/search-app
+{
+  "token_limit": 2000000,
+  "cost_limit": 25,
+  "currency": "USD"
+}
+```
+
+Use `GET /api/admin/quotas` to list configured policies.
+
+Quota periods are UTC calendar months. The dashboard's 24h / 7d / 30d selector
+changes the visible usage and cost trend, but monthly quota used/remaining
+always reflects the full current calendar month.
+
+For each configured tenant/application the usage response includes:
+
+- token limit
+- used tokens
+- remaining tokens
+- token utilization percent
+- cost limit
+- estimated cost used
+- estimated cost remaining
+- cost utilization percent
+- unpriced calls
+- calls priced in another currency
+- `cost_complete`
+
+If any monthly calls are unpriced or priced in a currency different from the
+quota currency, `cost_complete` is false. The gateway does not silently treat
+those calls as zero-cost.
+
+Configured quota scopes with zero usage still appear in the tenant/application
+summary with zero used and the full quota remaining.
+
+This stage reports quota consumption and remaining capacity. Request-time quota
+enforcement can build on the same persisted policy and usage data.
+
