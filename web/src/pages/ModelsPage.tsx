@@ -25,6 +25,7 @@ type RouteDraft = {
   public_url: string;
   public_docs_url: string;
   free_summary: string;
+  catalog_status: "draft" | "published";
 };
 
 type MultiConnection = {
@@ -60,6 +61,7 @@ const blankRoute = (): RouteDraft => ({
   public_url: "",
   public_docs_url: "",
   free_summary: "",
+  catalog_status: "draft",
 });
 
 function providerPayload(provider: ProviderDraft) {
@@ -154,6 +156,7 @@ export function ModelsPage({
         public_url: catalog.public_url,
         public_docs_url: catalog.public_docs_url,
         free_summary: catalog.free_summary,
+        catalog_status: "draft",
       });
       setMessage(
         catalog.has_endpoint
@@ -189,6 +192,7 @@ export function ModelsPage({
       public_url: route.public_url ?? "",
       public_docs_url: route.public_docs_url ?? "",
       free_summary: route.free_summary ?? "",
+      catalog_status: route.catalog_status === "published" ? "published" : "draft",
     });
   }
 
@@ -204,6 +208,7 @@ export function ModelsPage({
       public_url: draft.public_url.trim() || null,
       public_docs_url: draft.public_docs_url.trim() || null,
       free_summary: draft.free_summary.trim() || null,
+      catalog_status: draft.catalog_status,
     };
   }
 
@@ -418,7 +423,7 @@ export function ModelsPage({
           <div><h2>模型池</h2><p>Provider、连接、能力、优先级、价格和健康状态在一个页面管理。</p></div>
           <div className="actions"><button onClick={() => void probeAll()}>全部探测</button><button className="primary" onClick={() => { setEditing(null); setDraft(blankRoute()); }}>添加模型</button></div>
         </div>
-        <div className="table-wrap"><table><thead><tr><th>#</th><th>模型</th><th>Provider</th><th>能力</th><th>价格 / 1M</th><th>状态</th><th>操作</th></tr></thead>
+        <div className="table-wrap"><table><thead><tr><th>#</th><th>模型</th><th>Provider</th><th>能力</th><th>价格 / 1M</th><th>运行状态</th><th>目录状态</th><th>操作</th></tr></thead>
           <tbody>{ordered.map((route, index) => <tr key={route.id}>
             <td>{route.priority}</td>
             <td><b>{route.display_name || route.remote_model}</b><small>{route.remote_model}</small></td>
@@ -426,13 +431,14 @@ export function ModelsPage({
             <td>{route.capabilities.map((cap) => <span className="tag" key={cap}>{cap}</span>)}</td>
             <td>{route.pricing.input_per_million == null && route.pricing.output_per_million == null ? "—" : `${route.pricing.currency} ${route.pricing.input_per_million ?? "?"} / ${route.pricing.output_per_million ?? "?"}`}</td>
             <td><span className={`badge ${!route.enabled ? "muted-badge" : route.health === "healthy" ? "ok" : "warn"}`}>{route.enabled ? route.health : "disabled"}</span></td>
+            <td><span className={`badge ${route.catalog_status === "published" ? "ok" : "muted-badge"}`}>{route.catalog_status}</span></td>
             <td><div className="actions">
               <button onClick={() => void move(index, -1)}>↑</button><button onClick={() => void move(index, 1)}>↓</button>
               <button onClick={() => edit(route)}>编辑</button><button onClick={() => void mutate(route, "probe")}>探测</button>
               <button onClick={() => void mutate(route, "toggle")}>{route.enabled ? "停用" : "启用"}</button>
               <button className="danger" onClick={() => void mutate(route, "delete")}>删除</button>
             </div></td>
-          </tr>)}{!ordered.length && <tr><td colSpan={7} className="empty">还没有模型路由。</td></tr>}</tbody>
+          </tr>)}{!ordered.length && <tr><td colSpan={8} className="empty">还没有模型路由。</td></tr>}</tbody>
         </table></div>
       </section>
 
@@ -468,6 +474,7 @@ export function ModelsPage({
             <label>API Key（仅验证/保存本次）<input type="password" value={draft.credential} onChange={(event) => setDraft({ ...draft, credential: event.target.value })} /></label>
             <label>公开注册 URL<input value={draft.public_url} onChange={(event) => setDraft({ ...draft, public_url: event.target.value })} /></label>
             <label>公开文档 URL<input value={draft.public_docs_url} onChange={(event) => setDraft({ ...draft, public_docs_url: event.target.value })} /></label>
+            <label>目录状态<select value={draft.catalog_status} onChange={(event) => setDraft({ ...draft, catalog_status: event.target.value as "draft" | "published" })}><option value="draft">draft · 进入 review</option><option value="published">published · 可导出公开</option></select></label>
             <label className="full">免费说明<input value={draft.free_summary} onChange={(event) => setDraft({ ...draft, free_summary: event.target.value })} /></label>
           </div>
           {draft.provider_id === CUSTOM_PROVIDER_ID && <ProviderFields value={customProvider} onChange={setCustomProvider} prefix="custom-provider" />}
