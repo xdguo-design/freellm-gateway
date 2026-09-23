@@ -206,3 +206,110 @@ summary with zero used and the full quota remaining.
 This stage reports quota consumption and remaining capacity. Request-time quota
 enforcement can build on the same persisted policy and usage data.
 
+## Request-time quota enforcement
+
+Tenant and application quota policies are enforced before a provider request is
+started. Both scopes are checked and the most restrictive configured policy
+wins.
+
+### Token projection
+
+For chat requests the gateway estimates input tokens from the normalized
+request payload. If `max_completion_tokens` or `max_tokens` is provided, the
+output budget is added to the projection.
+
+The projected request is checked against current-month persisted Usage plus
+in-flight reservations. This prevents concurrent requests in the same gateway
+process from all seeing the same remaining balance.
+
+If the client does not provide an output token limit, the token projection is
+partial. The response exposes this with:
+
+```http
+X-FreeLLM-Quota-Projection: partial
+```
+
+Actual provider-reported Usage remains the source of truth after the request
+finishes.
+
+### Cost projection
+
+For a concrete model or route, request cost is projected from its configured
+input/output per-million-token prices.
+
+For `model=auto`, all currently eligible candidate routes are considered. For
+each currency the preflight uses the highest projected candidate cost. This
+prevents a cheap first route from understating the possible cost of failover to
+a more expensive route.
+
+Cost projection is considered complete only when the possible candidates can
+be priced and an explicit output token budget is known. If projection is
+partial, the gateway still rejects a request when already-persisted monthly
+cost has reached the hard budget, but it does not invent an unknown future
+cost.
+
+### Warning threshold
+
+Each quota policy has `warning_threshold_percent`, defaulting to 80.
+
+Example:
+
+```http
+PUT /api/admin/quotas/application/search-app
+
+{
+  "token_limit": 2000000,
+  "cost_limit": 25,
+  "currency": "USD",
+  "warning_threshold_percent": 80
+}
+```
+
+A successful request that reaches the threshold returns warning metadata in
+headers without changing the OpenAI-compatible response body:
+
+```http
+X-FreeLLM-Quota-Warning: application:search-app:tokens:82.40%
+X-FreeLLM-Quota-Warning-Count: 1
+X-FreeLLM-Quota-Period-End: 2026-10-01T00:00:00+00:00
+```
+
+### Hard-limit rejection
+
+If persisted usage is already exhausted, or a complete request projection
+would cross a hard limit, the gateway rejects the request before calling the
+provider:
+
+```http
+HTTP/1.1 429 Too Many Requests
+X-FreeLLM-Quota-Scope: application
+X-FreeLLM-Quota-Resource: tokens
+Retry-After: ...
+```
+
+The JSON error detail identifies:
+
+- `code=quota_exceeded`
+- scope type and ID
+- constrained resource: `tokens` or `cost`
+- used amount
+- projected amount when known
+- hard limit
+- remaining amount
+- quota period end
+
+A rejection does not create fake token usage because no provider tokens were
+consumed.
+
+### In-flight reservations
+
+Projected usage is reserved while a request is in flight. Reservations are
+released after a normal response, provider failure, or completion/termination
+of a streaming response. Actual persisted Usage then replaces the projection
+as the source of truth.
+
+Reservations are process-local, matching the current embedded SQLite /
+single-gateway runtime. A future multi-process deployment should move
+reservations to a shared transactional store before claiming strict
+cross-process enforcement.
+
