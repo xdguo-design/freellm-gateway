@@ -41,3 +41,18 @@ class ModelRoute:
     free_summary: str | None = None
     catalog_status: str = "draft"
     reasoning_effort: str | None = None
+
+
+
+@dataclass(frozen=True)
+class UsageRecord:
+    request_id: str
+    provider_id: str | None
+    remote_model: str | None
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    elapsed_ms: int
+    stream: bool
+    status: str
+    created_at: str
