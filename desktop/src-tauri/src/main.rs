@@ -220,7 +220,10 @@ fn init_script(admin_token: &str, api_token: &str, port: u16, ga_measurement_id:
     // __ADMIN_TOKEN__ / __API_TOKEN__ / __PORT__ / __GA_MEASUREMENT_ID__ are replaced below
     // instead of format! so the JS braces never fight the Rust formatter.
     r#"(function () {
-      try { sessionStorage.setItem('freellm_admin_token', '__ADMIN_TOKEN__'); } catch (e) {}
+      try {
+        sessionStorage.setItem('freellm_gateway_admin_token', '__ADMIN_TOKEN__');
+        sessionStorage.setItem('freellm_admin_token', '__ADMIN_TOKEN__');
+      } catch (e) {}
       try { sessionStorage.setItem('freellm_api_token', '__API_TOKEN__'); } catch (e) {}
       window.__FREELLM_GATEWAY_PORT__ = __PORT__;
       window.__FREELLM_GA_MEASUREMENT_ID__ = '__GA_MEASUREMENT_ID__';
