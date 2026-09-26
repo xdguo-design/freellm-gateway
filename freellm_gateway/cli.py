@@ -1,6 +1,9 @@
 import argparse
 import subprocess
 import sys
+import threading
+import time
+import webbrowser
 from pathlib import Path
 
 from .catalog import export_catalog
@@ -15,6 +18,16 @@ def build_parser() -> argparse.ArgumentParser:
     run = subparsers.add_parser("run", help="start the local HTTP server")
     run.add_argument("--host", default="127.0.0.1")
     run.add_argument("--port", default=8765, type=int)
+    run.add_argument(
+        "--skip-web-build",
+        action="store_true",
+        help="do not build the React admin bundle when running from source",
+    )
+    run.add_argument(
+        "--open-browser",
+        action="store_true",
+        help="open the React admin console after the server starts",
+    )
 
     init = subparsers.add_parser("init", help="initialize the SQLite database")
     init.add_argument("--db", default="data/gateway.sqlite3")
@@ -35,6 +48,25 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "run":
         import uvicorn
+
+        if not args.skip_web_build:
+            from .web_assets import ensure_admin_bundle
+
+            try:
+                ensure_admin_bundle()
+            except (RuntimeError, subprocess.CalledProcessError) as error:
+                print(f"unable to prepare React admin: {error}", file=sys.stderr)
+                return 2
+
+        if args.open_browser:
+            browser_host = "127.0.0.1" if args.host in {"0.0.0.0", "::"} else args.host
+            url = f"http://{browser_host}:{args.port}/admin/"
+
+            def open_admin() -> None:
+                time.sleep(0.8)
+                webbrowser.open(url)
+
+            threading.Thread(target=open_admin, daemon=True).start()
 
         uvicorn.run("freellm_gateway.main:app", host=args.host, port=args.port, reload=False)
         return 0
