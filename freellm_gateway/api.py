@@ -220,6 +220,11 @@ def create_app(
                 connection.execute("SELECT 1").fetchone()
         except sqlite3.Error as error:
             raise HTTPException(status_code=503, detail="database is not ready") from error
+        if hasattr(secrets, "check_ready"):
+            try:
+                secrets.check_ready()
+            except (OSError, RuntimeError) as error:
+                raise HTTPException(status_code=503, detail="secret storage is not ready") from error
         return {"status": "ok", "database": "ok", "secret_storage": "ok"}
 
     @app.get("/")
