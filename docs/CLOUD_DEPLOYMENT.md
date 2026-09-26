@@ -111,6 +111,40 @@ Configure:
 5. the platform-provided `PORT` if required;
 6. HTTPS-only public ingress.
 
+## WorkBuddy cloud deployment (CloudBase Run)
+
+WorkBuddy can deploy this backend as a Docker/container service through
+Tencent CloudBase Run. Use the repository Dockerfile and attach a persistent
+Cloud File Storage (CFS) mount at `/data`; the container's writable layer is
+ephemeral and must not hold the SQLite database or encrypted provider keys.
+
+Configure the CloudBase service as follows:
+
+1. Build from this repository with the root `Dockerfile`.
+2. Mount a CFS file system at `/data`, in the service's supported region and
+   network. Keep the SQLite database and encrypted credential file on this
+   mount so they survive restarts and new container instances.
+3. Set the service's maximum instance count to **1**. Do not enable autoscaling
+   or deploy multiple active replicas: quota reservations are process-local
+   and SQLite is the single-instance storage profile.
+4. Add `FREELLM_GATEWAY_API_TOKEN`, `FREELLM_GATEWAY_ADMIN_TOKEN`, and
+   `FREELLM_GATEWAY_SECRET_KEY` as CloudBase environment secrets. Also set
+   `FREELLM_GATEWAY_DB=/data/gateway.sqlite3`,
+   `FREELLM_GATEWAY_SECRETS_FILE=/data/provider-secrets.json`,
+   `FREELLM_GATEWAY_CONNECTION_LOG=/data/gateway-connections.jsonl`, and
+   `FREELLM_GATEWAY_HOST=0.0.0.0`. Use the port assigned by the service via
+   `PORT` (or set `FREELLM_GATEWAY_PORT=8765` if configuring that port).
+   Generate secrets as described above; never use the example placeholders.
+5. Configure readiness to `GET /health/ready` and liveness to
+   `GET /health`. Publish the admin UI at `/admin/` and the compatible API
+   under `/v1` through the service's HTTPS endpoint.
+6. Back up the complete mounted `/data` volume and the encryption key
+   separately. Test restoring both before relying on the service.
+
+Treat this as a single-instance deployment. Before increasing the instance
+count, migrate quota reservations and persistent state to a shared
+transactional database, then run the full release gate again.
+
 ## HTTPS option B: VPS with Caddy
 
 Point the domain's A/AAAA DNS record at the server, allow inbound TCP 80/443
