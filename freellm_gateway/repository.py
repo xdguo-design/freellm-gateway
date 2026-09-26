@@ -315,6 +315,7 @@ class Repository:
         *,
         projected_tokens: int = 0,
         projected_costs: dict[str, int] | None = None,
+        token_projection_complete: bool = True,
         cost_projection_complete: bool = False,
     ) -> dict:
         projected_tokens = max(0, int(projected_tokens))
@@ -346,7 +347,20 @@ class Repository:
                 if token_limit is not None:
                     token_limit = int(token_limit)
                     token_percent = 100.0 if token_limit == 0 else token_after * 100 / token_limit
-                    if used_tokens >= token_limit or token_after > token_limit:
+                    if not token_projection_complete:
+                        violation = {
+                            "code": "quota_output_limit_required",
+                            "scope_type": scope_type,
+                            "scope_id": scope_id,
+                            "resource": "tokens",
+                            "used": used_tokens,
+                            "projected": projected_tokens,
+                            "limit": token_limit,
+                            "remaining": max(0, token_limit - used_tokens),
+                            "period_end": statuses["period"]["end"],
+                            "required_field": "max_tokens or max_completion_tokens",
+                        }
+                    elif used_tokens >= token_limit or token_after > token_limit:
                         violation = {
                             "code": "quota_exceeded",
                             "scope_type": scope_type,
@@ -375,9 +389,24 @@ class Repository:
                 cost_after = used_cost + (projected_cost or 0)
                 if cost_limit is not None:
                     cost_limit = int(cost_limit)
-                    if used_cost >= cost_limit or (
-                        cost_projection_complete
-                        and projected_cost is not None
+                    if not cost_projection_complete:
+                        candidate = {
+                            "code": "quota_cost_projection_unavailable",
+                            "scope_type": scope_type,
+                            "scope_id": scope_id,
+                            "resource": "cost",
+                            "currency": currency,
+                            "used_micros": used_cost,
+                            "projected_micros": projected_cost,
+                            "limit_micros": cost_limit,
+                            "remaining_micros": max(0, cost_limit - used_cost),
+                            "period_end": statuses["period"]["end"],
+                            "projection_complete": False,
+                        }
+                        if violation is None:
+                            violation = candidate
+                    elif used_cost >= cost_limit or (
+                        projected_cost is not None
                         and cost_after > cost_limit
                     ):
                         candidate = {
@@ -407,21 +436,6 @@ class Repository:
                                 "threshold_percent": threshold,
                                 "remaining_after_request_micros": max(0, cost_limit - cost_after),
                             })
-                    elif not cost_projection_complete:
-                        current_percent = (
-                            100.0 if cost_limit == 0 else used_cost * 100 / cost_limit
-                        )
-                        if current_percent >= threshold:
-                            warnings.append({
-                                "scope_type": scope_type,
-                                "scope_id": scope_id,
-                                "resource": "cost",
-                                "currency": currency,
-                                "utilization_percent": round(current_percent, 2),
-                                "threshold_percent": threshold,
-                                "projection_complete": False,
-                                "remaining_after_request_micros": max(0, cost_limit - used_cost),
-                            })
 
                 checks.append({
                     "scope_type": scope_type,
@@ -429,6 +443,7 @@ class Repository:
                     "warning_threshold_percent": threshold,
                     "projected_tokens": projected_tokens,
                     "projected_costs": projected_costs,
+                    "token_projection_complete": token_projection_complete,
                     "cost_projection_complete": cost_projection_complete,
                 })
 
