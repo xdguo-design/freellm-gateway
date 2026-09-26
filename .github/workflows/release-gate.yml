@@ -340,6 +340,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate cloud compose and HTTPS proxy configuration
+        env:
+          FREELLM_DOMAIN: gateway.example.com
+        run: |
+          docker compose --env-file .env.cloud.example -f docker-compose.cloud.yml config >/tmp/freellm-compose.yml
+          docker run --rm \
+            -e FREELLM_DOMAIN=gateway.example.com \
+            -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile
+
       - name: Build production image
         run: docker build -t freellm-gateway:ci .
 
