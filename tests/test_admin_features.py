@@ -208,6 +208,44 @@ def test_bulk_route_creation_preserves_explicit_catalog_status(tmp_path):
     assert routes["draft-model"].catalog_status == "draft"
 
 
+def test_bulk_route_creation_rejects_provider_identity_drift(tmp_path):
+    repository = Repository(Database(tmp_path / "gateway.sqlite3"))
+    repository.initialize()
+    repository.save_provider(
+        Provider("p", "Provider", "openai", "https://old.example/v1", "https://old.example")
+    )
+    client = TestClient(
+        create_app(
+            ModelGateway([], {}),
+            repository=repository,
+            secrets=FakeSecrets(),
+            api_token="api",
+            admin_token="admin",
+        )
+    )
+
+    response = client.post(
+        "/api/admin/routes/bulk",
+        headers={"Authorization": "Bearer admin"},
+        json={
+            "provider": {
+                "id": "p",
+                "name": "Provider",
+                "protocol": "openai",
+                "base_url": "https://new.example/v1",
+                "official_url": "https://new.example",
+            },
+            "models": [{"remote_model": "m"}],
+            "credential": "secret",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "provider id already belongs to another base URL"
+    assert repository.list_providers()[0].base_url == "https://old.example/v1"
+    assert repository.list_routes() == []
+
+
 def test_admin_rejects_invalid_catalog_status(tmp_path):
     repository = Repository(Database(tmp_path / "gateway.sqlite3"))
     repository.initialize()
