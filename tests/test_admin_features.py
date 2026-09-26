@@ -79,6 +79,91 @@ def test_admin_can_save_custom_provider_and_route(tmp_path):
     assert "secret" not in response.text
 
 
+def test_admin_provider_update_refreshes_runtime_adapter_and_delete_requires_no_routes(tmp_path):
+    repository = Repository(Database(tmp_path / "gateway.sqlite3"))
+    repository.initialize()
+    repository.save_provider(
+        Provider("p", "Provider", "openai", "https://old.example/v1", "https://old.example")
+    )
+    secrets = FakeSecrets()
+    credential_ref = secrets.save("route", "secret")
+    route = ModelRoute(
+        id="route",
+        provider_id="p",
+        remote_model="m",
+        priority=1,
+        credential_ref=credential_ref,
+    )
+    repository.save_route(route)
+    gateway = ModelGateway([route], {})
+    app = create_app(
+        gateway,
+        repository=repository,
+        secrets=secrets,
+        api_token="api",
+        admin_token="admin",
+    )
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer admin"}
+
+    updated = client.put(
+        "/api/admin/providers/p",
+        headers=headers,
+        json={
+            "id": "p",
+            "name": "Provider Updated",
+            "protocol": "openai",
+            "base_url": "https://new.example/v1",
+            "official_url": "https://new.example",
+        },
+    )
+
+    assert updated.status_code == 200
+    assert repository.list_providers()[0].name == "Provider Updated"
+    assert gateway.adapters["route"].endpoint == "https://new.example/v1/chat/completions"
+
+    blocked = client.delete("/api/admin/providers/p", headers=headers)
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"] == "provider has model routes"
+
+    removed_route = client.delete("/api/admin/routes/route", headers=headers)
+    assert removed_route.status_code == 204
+    deleted = client.delete("/api/admin/providers/p", headers=headers)
+    assert deleted.status_code == 204
+    assert repository.list_providers() == []
+
+
+def test_admin_provider_id_is_immutable(tmp_path):
+    repository = Repository(Database(tmp_path / "gateway.sqlite3"))
+    repository.initialize()
+    repository.save_provider(
+        Provider("p", "Provider", "openai", "https://api.example/v1", "https://example.com")
+    )
+    client = TestClient(
+        create_app(
+            ModelGateway([], {}),
+            repository=repository,
+            api_token="api",
+            admin_token="admin",
+        )
+    )
+
+    response = client.put(
+        "/api/admin/providers/p",
+        headers={"Authorization": "Bearer admin"},
+        json={
+            "id": "other",
+            "name": "Provider",
+            "protocol": "openai",
+            "base_url": "https://api.example/v1",
+            "official_url": "https://example.com",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "provider id cannot be changed"
+
+
 def test_bulk_route_creation_preserves_explicit_catalog_status(tmp_path):
     repository = Repository(Database(tmp_path / "gateway.sqlite3"))
     app = create_app(
