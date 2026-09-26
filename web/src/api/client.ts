@@ -1,4 +1,11 @@
 const ADMIN_TOKEN_KEY = "freellm_gateway_admin_token";
+const LEGACY_ADMIN_TOKEN_KEY = "freellm_admin_token";
+
+declare global {
+  interface Window {
+    __FREELLM_GATEWAY_PORT__?: number;
+  }
+}
 
 export class ApiError extends Error {
   status: number;
@@ -12,13 +19,37 @@ export class ApiError extends Error {
   }
 }
 
+function browserSessionStorage(): Storage | null {
+  return typeof window !== "undefined" && typeof window.sessionStorage !== "undefined"
+    ? window.sessionStorage
+    : null;
+}
+
 export function getAdminToken(): string {
-  return sessionStorage.getItem(ADMIN_TOKEN_KEY) ?? "";
+  const storage = browserSessionStorage();
+  if (!storage) return "";
+  const current = storage.getItem(ADMIN_TOKEN_KEY);
+  if (current) return current;
+  const legacy = storage.getItem(LEGACY_ADMIN_TOKEN_KEY) ?? "";
+  if (legacy) storage.setItem(ADMIN_TOKEN_KEY, legacy);
+  return legacy;
 }
 
 export function setAdminToken(value: string): void {
-  if (value) sessionStorage.setItem(ADMIN_TOKEN_KEY, value);
-  else sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+  const storage = browserSessionStorage();
+  if (!storage) return;
+  if (value) storage.setItem(ADMIN_TOKEN_KEY, value);
+  else storage.removeItem(ADMIN_TOKEN_KEY);
+}
+
+export function resolveApiUrl(path: string, desktopPort?: number): string {
+  if (/^https?:\/\//i.test(path)) return path;
+  const port = desktopPort ?? (
+    typeof window !== "undefined" ? window.__FREELLM_GATEWAY_PORT__ : undefined
+  );
+  if (!port) return path;
+  const suffix = path.startsWith("/") ? path : `/${path}`;
+  return `http://127.0.0.1:${port}${suffix}`;
 }
 
 export async function api<T>(
@@ -33,7 +64,7 @@ export async function api<T>(
     headers.set("Content-Type", "application/json");
     body = JSON.stringify(options.body);
   }
-  const response = await fetch(path, {
+  const response = await fetch(resolveApiUrl(path), {
     method: options.method ?? "GET",
     headers,
     body,
