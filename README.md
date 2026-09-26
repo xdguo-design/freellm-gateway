@@ -171,11 +171,21 @@ Base URL：https://api.groq.com/openai/v1
 
 编辑模型路由时，可在“推理强度”中填写 `medium`、`low` 或 `high`。该值作为路由默认值；客户端请求如果自行传入 `reasoning_effort`，则以客户端值为准。
 
-所有请求使用：
+所有请求默认支持：
 
 ```http
 Authorization: Bearer <FREELLM_GATEWAY_API_TOKEN>
 ```
+
+也可以使用代理兼容头：
+
+```http
+X-Free-LLM-Token: <FREELLM_GATEWAY_API_TOKEN>
+```
+
+在 WorkBuddy 托管环境中，反向代理会占用 `Authorization`，因此调用
+`/v1/*` 时应使用 `X-Free-LLM-Token`。两种方式在网关内同时保留，
+自定义头存在时优先使用它。
 
 ```powershell
 $headers = @{ Authorization = "Bearer $env:FREELLM_GATEWAY_API_TOKEN" }

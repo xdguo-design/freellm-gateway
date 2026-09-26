@@ -93,7 +93,7 @@ def create_app(
         ],
         allow_credentials=False,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type"],
+        allow_headers=["Authorization", "X-Free-LLM-Token", "Content-Type"],
     )
     app.state.gateway = gateway
     app.state.repository = repository
@@ -130,16 +130,28 @@ def create_app(
 
     gateway.on_connection_logged = persist_connection
 
+    def _access_token(
+        authorization: str | None,
+        forwarded_token: str | None = None,
+    ) -> str | None:
+        if isinstance(forwarded_token, str) and forwarded_token:
+            return forwarded_token
+        if isinstance(authorization, str) and authorization.startswith("Bearer "):
+            return authorization[7:]
+        return None
+
     def require_token(
-        authorization: Annotated[str | None, Header()] = None,
+        authorization: str | None = None,
+        forwarded_token: str | None = None,
         expected: str = api_token,
     ) -> RequestIdentity:
-        if authorization == f"Bearer {expected}":
+        token = _access_token(authorization, forwarded_token)
+        if token == expected:
             return RequestIdentity("system", "legacy-global", "global_token")
-        if not isinstance(authorization, str) or not authorization.startswith("Bearer "):
+        if token is None:
             raise HTTPException(status_code=401, detail="invalid bearer token")
         if repository is not None:
-            application = repository.verify_application_key(authorization[7:])
+            application = repository.verify_application_key(token)
             if application is not None:
                 return RequestIdentity(application.tenant_id, application.id, "application_key")
         raise HTTPException(status_code=401, detail="invalid bearer token")
@@ -152,7 +164,8 @@ def create_app(
                     return
             except ValueError:
                 pass
-        if authorization != f"Bearer {admin_token}":
+        token = _access_token(authorization, request.headers.get("x-free-llm-token"))
+        if token != admin_token:
             raise HTTPException(status_code=401, detail="invalid admin token")
 
     def route_json(route):
@@ -474,8 +487,13 @@ def create_app(
         }
 
     @app.get("/v1/models")
-    def list_models(authorization: Annotated[str | None, Header()] = None) -> dict:
-        require_token(authorization)
+    def list_models(
+        authorization: Annotated[str | None, Header()] = None,
+        x_free_llm_token: Annotated[
+            str | None, Header(alias="X-Free-LLM-Token")
+        ] = None,
+    ) -> dict:
+        require_token(authorization, x_free_llm_token)
         data = []
         seen_models = set()
         for route in gateway.routes:
@@ -496,8 +514,11 @@ def create_app(
         payload: dict,
         response: Response,
         authorization: Annotated[str | None, Header()] = None,
+        x_free_llm_token: Annotated[
+            str | None, Header(alias="X-Free-LLM-Token")
+        ] = None,
     ):
-        identity = require_token(authorization)
+        identity = require_token(authorization, x_free_llm_token)
         usage_context = {
             "tenant_id": identity.tenant_id,
             "application_id": identity.application_id,
@@ -541,8 +562,11 @@ def create_app(
         payload: dict,
         response: Response,
         authorization: Annotated[str | None, Header()] = None,
+        x_free_llm_token: Annotated[
+            str | None, Header(alias="X-Free-LLM-Token")
+        ] = None,
     ):
-        identity = require_token(authorization)
+        identity = require_token(authorization, x_free_llm_token)
         usage_context = {
             "tenant_id": identity.tenant_id,
             "application_id": identity.application_id,

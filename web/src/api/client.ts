@@ -52,16 +52,20 @@ export function resolveApiUrl(path: string, desktopPort?: number): string {
   return `http://127.0.0.1:${port}${suffix}`;
 }
 
+export function buildApiHeaders(token: string, hasBody = false): Headers {
+  const headers = new Headers({ Accept: "application/json" });
+  if (token) headers.set("X-Free-LLM-Token", token);
+  if (hasBody) headers.set("Content-Type", "application/json");
+  return headers;
+}
+
 export async function api<T>(
   path: string,
   options: { method?: string; body?: unknown; signal?: AbortSignal } = {},
 ): Promise<T> {
-  const headers = new Headers({ Accept: "application/json" });
-  const token = getAdminToken();
-  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const headers = buildApiHeaders(getAdminToken(), options.body !== undefined);
   let body: string | undefined;
   if (options.body !== undefined) {
-    headers.set("Content-Type", "application/json");
     body = JSON.stringify(options.body);
   }
   const response = await fetch(resolveApiUrl(path), {
