@@ -55,7 +55,7 @@ wheel 已包含 React 管理后台，**运行时不需要 Node.js**。
 - 支持文本、长上下文、视觉和生图能力标签
 - 从 `freellm.top` 目录自动带出 Provider、注册地址、文档和免费额度说明
 - 管理台支持同时选择多个连接，并为每个连接分别验证凭据、选择模型后批量保存
-- API Key 仅保存在本机凭据存储，不写入目录导出或接口响应
+- Provider API Key 在桌面端使用系统凭据存储，在云端使用加密持久文件；均不写入目录导出或接口响应
 - Windows 桌面版启动时自动运行本地网关，不弹出 CMD 窗口
 
 ## 桌面版
@@ -81,6 +81,29 @@ desktop/src-tauri/target/release/freellm-studio.exe
 ```
 
 更多桌面构建说明见 [`desktop/README.md`](desktop/README.md)。
+
+## 单实例云部署
+
+仓库已提供生产 Docker 镜像、`/data` 持久卷约定、加密 Provider 密钥存储、
+`/health/ready` 就绪检查以及 Caddy 自动 HTTPS 示例。
+
+当前云部署必须保持 **1 个应用实例 / 1 个副本**；SQLite 与 in-flight 配额
+reservation 还不是多实例共享架构。完整步骤见
+[`docs/CLOUD_DEPLOYMENT.md`](docs/CLOUD_DEPLOYMENT.md)。
+
+快速构建：
+
+```bash
+docker build -t freellm-gateway:local .
+```
+
+自托管 VPS 可使用：
+
+```bash
+cp .env.cloud.example .env.cloud
+# 填写真实域名、API/Admin Token 和 Fernet Secret Key
+docker compose --env-file .env.cloud -f docker-compose.cloud.yml up -d --build
+```
 
 ## 开发运行
 
