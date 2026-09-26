@@ -33,6 +33,14 @@ jobs:
       - name: Install web dependencies
         run: npm install --prefix web --no-audit --no-fund
 
+      - name: Upload generated web lockfile snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-package-lock-snapshot
+          path: web/package-lock.json
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Typecheck React TypeScript
         run: npm run typecheck --prefix web
 
