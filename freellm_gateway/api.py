@@ -192,6 +192,18 @@ def create_app(
             },
         }
 
+    async def refresh_provider_adapters(provider: Provider) -> None:
+        for route in list(gateway.routes):
+            if route.provider_id != provider.id:
+                continue
+            previous = gateway.adapters.pop(route.id, None)
+            if previous is not None and hasattr(previous, "aclose"):
+                await previous.aclose()
+            if app.state.secrets is not None:
+                adapter = adapter_for_route(route, provider, app.state.secrets)
+                if adapter is not None:
+                    gateway.adapters[route.id] = adapter
+
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
@@ -553,20 +565,50 @@ def create_app(
         return {"data": [provider.__dict__ for provider in providers]}
 
     @app.post("/api/admin/providers", status_code=201)
-    def admin_create_provider(request: Request, payload: dict, authorization: Annotated[str | None, Header()] = None):
+    async def admin_create_provider(request: Request, payload: dict, authorization: Annotated[str | None, Header()] = None):
         require_admin(request, authorization)
         if repository is None:
             raise HTTPException(status_code=503, detail="persistence is not configured")
-        required = ("id", "name", "protocol", "base_url", "official_url")
-        if any(not isinstance(payload.get(field), str) or not payload[field] for field in required):
-            raise HTTPException(status_code=422, detail="provider fields are required")
-        provider = Provider(*(payload[field] for field in required))
-        if provider.protocol not in SUPPORTED_PROVIDER_PROTOCOLS:
-            raise HTTPException(status_code=422, detail="protocol must be openai, anthropic or gemini")
-        _require_provider_base_url(provider.base_url)
-        _require_public_url(provider.official_url, "official_url")
+        provider = _provider_from_payload(payload)
         repository.save_provider(provider)
+        await refresh_provider_adapters(provider)
         return provider.__dict__
+
+    @app.put("/api/admin/providers/{provider_id}")
+    async def admin_update_provider(
+        provider_id: str,
+        request: Request,
+        payload: dict,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(request, authorization)
+        if repository is None:
+            raise HTTPException(status_code=503, detail="persistence is not configured")
+        current = next((item for item in repository.list_providers() if item.id == provider_id), None)
+        if current is None:
+            raise HTTPException(status_code=404, detail="provider not found")
+        provider = _provider_from_payload(payload)
+        if provider.id != provider_id:
+            raise HTTPException(status_code=422, detail="provider id cannot be changed")
+        repository.save_provider(provider)
+        await refresh_provider_adapters(provider)
+        return provider.__dict__
+
+    @app.delete("/api/admin/providers/{provider_id}", status_code=204)
+    async def admin_delete_provider(
+        provider_id: str,
+        request: Request,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(request, authorization)
+        if repository is None:
+            raise HTTPException(status_code=503, detail="persistence is not configured")
+        current = next((item for item in repository.list_providers() if item.id == provider_id), None)
+        if current is None:
+            raise HTTPException(status_code=404, detail="provider not found")
+        if any(route.provider_id == provider_id for route in gateway.routes):
+            raise HTTPException(status_code=409, detail="provider has model routes")
+        repository.delete_provider(provider_id)
 
     @app.post("/api/admin/providers/{provider_id}/discover")
     async def admin_discover_provider(provider_id: str, request: Request, authorization: Annotated[str | None, Header()] = None):
