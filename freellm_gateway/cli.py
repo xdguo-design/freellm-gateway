@@ -1,4 +1,5 @@
 import argparse
+import os
 import subprocess
 import sys
 import threading
@@ -16,8 +17,15 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     run = subparsers.add_parser("run", help="start the local HTTP server")
-    run.add_argument("--host", default="127.0.0.1")
-    run.add_argument("--port", default=8765, type=int)
+    run.add_argument(
+        "--host",
+        default=os.getenv("FREELLM_GATEWAY_HOST", "127.0.0.1"),
+    )
+    run.add_argument(
+        "--port",
+        default=int(os.getenv("PORT", os.getenv("FREELLM_GATEWAY_PORT", "8765"))),
+        type=int,
+    )
     run.add_argument(
         "--skip-web-build",
         action="store_true",
