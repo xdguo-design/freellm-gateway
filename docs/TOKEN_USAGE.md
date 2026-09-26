@@ -203,8 +203,8 @@ those calls as zero-cost.
 Configured quota scopes with zero usage still appear in the tenant/application
 summary with zero used and the full quota remaining.
 
-This stage reports quota consumption and remaining capacity. Request-time quota
-enforcement can build on the same persisted policy and usage data.
+The same persisted policy and usage data is used by request-time quota
+enforcement.
 
 ## Request-time quota enforcement
 
@@ -222,15 +222,14 @@ The projected request is checked against current-month persisted Usage plus
 in-flight reservations. This prevents concurrent requests in the same gateway
 process from all seeing the same remaining balance.
 
-If the client does not provide an output token limit, the token projection is
-partial. The response exposes this with:
+If a tenant or application has a hard token quota, chat requests must provide
+`max_completion_tokens` or `max_tokens`. Without an explicit output bound,
+the gateway cannot guarantee that the provider response will remain inside the
+hard quota, so it rejects the request with HTTP 422 and
+`code=quota_output_limit_required` before calling a provider.
 
-```http
-X-FreeLLM-Quota-Projection: partial
-```
-
-Actual provider-reported Usage remains the source of truth after the request
-finishes.
+Actual provider-reported Usage remains the source of truth after an accepted
+request finishes.
 
 ### Cost projection
 
@@ -243,10 +242,10 @@ prevents a cheap first route from understating the possible cost of failover to
 a more expensive route.
 
 Cost projection is considered complete only when the possible candidates can
-be priced and an explicit output token budget is known. If projection is
-partial, the gateway still rejects a request when already-persisted monthly
-cost has reached the hard budget, but it does not invent an unknown future
-cost.
+be priced and an explicit output token budget is known. If a hard cost quota is
+configured and the request cannot be fully priced, the gateway rejects it with
+HTTP 422 and `code=quota_cost_projection_unavailable`. This prevents an
+unpriced or unbounded request from silently crossing a hard budget.
 
 ### Warning threshold
 
@@ -287,7 +286,12 @@ X-FreeLLM-Quota-Resource: tokens
 Retry-After: ...
 ```
 
-The JSON error detail identifies:
+Requests that cannot be safely projected are rejected with HTTP 422 instead:
+`quota_output_limit_required` for an unbounded chat request under a token
+quota, or `quota_cost_projection_unavailable` when a configured cost budget
+cannot be fully priced.
+
+The JSON error detail for a hard-limit exhaustion identifies:
 
 - `code=quota_exceeded`
 - scope type and ID
