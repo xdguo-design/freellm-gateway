@@ -82,6 +82,7 @@ def test_admin_rejects_private_route_endpoint_override(tmp_path):
     client, _, _ = make_client(tmp_path)
     provider = client.post(
         "/api/admin/providers",
+        headers=admin_headers(),
         json={
             "id": "local",
             "name": "Local",
