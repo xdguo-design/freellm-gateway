@@ -1130,6 +1130,13 @@ def create_app(
 def _route_from_payload(payload: dict, priority: int):
     from .models import ModelRoute
 
+    endpoint = payload.get("endpoint")
+    if endpoint is not None:
+        if not isinstance(endpoint, str) or not endpoint.strip():
+            raise HTTPException(status_code=422, detail="endpoint must be a non-empty string or null")
+        endpoint = endpoint.strip()
+        _require_provider_base_url(endpoint)
+
     return ModelRoute(
         id=payload["id"],
         provider_id=payload["provider_id"],
@@ -1138,6 +1145,7 @@ def _route_from_payload(payload: dict, priority: int):
         capabilities=frozenset(payload.get("capabilities", ["chat"])),
         display_name=payload.get("display_name"),
         reasoning_effort=_normalize_reasoning_effort(payload.get("reasoning_effort")),
+        endpoint=endpoint,
         public_url=payload.get("public_url"),
         public_docs_url=payload.get("public_docs_url"),
         free_summary=payload.get("free_summary"),
