@@ -116,7 +116,7 @@ export function UsagePage() {
         <div className="filter-grid">
           <label>{t("common.tenant")}<select value={filters.tenant_id} onChange={(event) => setFilters({ ...filters, tenant_id: event.target.value, application_id: "" })}><option value="">{t("usage.allTenants")}</option>{usage.filter_options.tenants.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
           <label>{t("common.application")}<select value={filters.application_id} onChange={(event) => setFilters({ ...filters, application_id: event.target.value })}><option value="">{t("usage.allApplications")}</option>{apps.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-          <label>Provider<select value={filters.provider_id} onChange={(event) => setFilters({ ...filters, provider_id: event.target.value, remote_model: "" })}><option value="">{t("usage.allProviders")}</option>{usage.filter_options.providers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+          <label>{t("common.provider")}<select value={filters.provider_id} onChange={(event) => setFilters({ ...filters, provider_id: event.target.value, remote_model: "" })}><option value="">{t("usage.allProviders")}</option>{usage.filter_options.providers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
           <label>{t("common.model")}<select value={filters.remote_model} onChange={(event) => setFilters({ ...filters, remote_model: event.target.value })}><option value="">{t("usage.allModels")}</option>{models.map((item) => <option key={item.id + item.provider_id} value={item.id}>{item.id}</option>)}</select></label>
         </div>
         <div className="form-actions"><button onClick={() => setFilters(emptyFilters)}>{t("usage.reset")}</button></div>
@@ -162,7 +162,7 @@ function UsageTable({ title, rows, kind }: { title: string; rows: UsageGroup[]; 
   return (
     <section className="card">
       <div className="section-head"><div><h2>{title}</h2></div></div>
-      <div className="table-wrap"><table><thead><tr><th>{t("usage.dimension")}</th><th>Token</th><th>{t("usage.estimatedCost")}</th>{(kind === "tenant" || kind === "application") && <><th>{t("usage.tokenQuota")}</th><th>{t("usage.costQuota")}</th><th>{t("common.status")}</th></>}</tr></thead>
+      <div className="table-wrap"><table><thead><tr><th>{t("usage.dimension")}</th><th>{t("common.token")}</th><th>{t("usage.estimatedCost")}</th>{(kind === "tenant" || kind === "application") && <><th>{t("usage.tokenQuota")}</th><th>{t("usage.costQuota")}</th><th>{t("common.status")}</th></>}</tr></thead>
         <tbody>{rows.map((row, index) => {
           const label = row.tenant_name || row.application_name || row.provider_name || row.remote_model || row.day || t("common.unknown");
           const sub = row.tenant_id || row.application_id || row.provider_id || "";
