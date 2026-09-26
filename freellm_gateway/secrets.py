@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 from pathlib import Path
 from threading import Lock
 from urllib.parse import quote, unquote, urlparse
@@ -82,6 +83,22 @@ class EncryptedFileSecretStore:
             if name in data:
                 data.pop(name)
                 self._write(data)
+
+    def check_ready(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            self._load()
+            try:
+                with tempfile.NamedTemporaryFile(
+                    dir=self.path.parent,
+                    prefix=".freellm-secret-ready-",
+                    delete=True,
+                ):
+                    pass
+            except OSError as error:
+                raise RuntimeError(
+                    f"encrypted secret store directory is not writable: {self.path.parent}"
+                ) from error
 
     def _load(self) -> dict[str, str]:
         if not self.path.exists():
