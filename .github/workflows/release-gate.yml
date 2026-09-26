@@ -5,7 +5,6 @@ on:
     branches:
       - dev
       - main
-      - feature/provider-platform-v2
   pull_request:
   workflow_dispatch:
 
