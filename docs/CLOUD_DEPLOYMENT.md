@@ -12,7 +12,6 @@ Mount a persistent volume at `/data`. The container stores:
 - `/data/gateway.sqlite3` — providers, model routes, tenants, applications,
   quotas and usage.
 - `/data/provider-secrets.json` — Provider API keys encrypted with Fernet.
-- `/data/gateway.log` — runtime log when enabled.
 - `/data/gateway-connections.jsonl` — safe connection/usage log.
 - `/data/catalog-export.json` — generated public catalog export.
 
@@ -50,7 +49,6 @@ Important environment variables:
 | `FREELLM_GATEWAY_SECRET_KEY` | Fernet key kept in the cloud secret manager |
 | `FREELLM_GATEWAY_SECRETS_FILE` | `/data/provider-secrets.json` |
 | `FREELLM_GATEWAY_DB` | `/data/gateway.sqlite3` |
-| `FREELLM_GATEWAY_LOG` | `/data/gateway.log` |
 | `FREELLM_GATEWAY_CONNECTION_LOG` | `/data/gateway-connections.jsonl` |
 | `FREELLM_GATEWAY_HOST` | `0.0.0.0` inside the container |
 | `PORT` or `FREELLM_GATEWAY_PORT` | Cloud-assigned port or `8765` |
@@ -58,7 +56,9 @@ Important environment variables:
 
 Do not put Provider API keys into the image, Dockerfile, repository, or compose
 file. Add them through the admin UI after HTTPS is active; they are encrypted
-before being written to the persistent volume.
+before being written to the persistent volume. Application logs should be
+collected from container stdout/stderr by the cloud logging service; the
+connection/usage JSONL file remains on the persistent volume.
 
 ## Build and run the container
 
@@ -132,6 +132,11 @@ Verify:
 ```bash
 curl -fsS "https://$FREELLM_DOMAIN/health/ready"
 ```
+
+The admin UI is then available at `https://$FREELLM_DOMAIN/admin/`. Remote
+admin API calls require `Authorization: Bearer <FREELLM_GATEWAY_ADMIN_TOKEN>`;
+normal OpenAI-compatible client calls under `/v1` use
+`FREELLM_GATEWAY_API_TOKEN` or an application key.
 
 ## Backup and restore
 
