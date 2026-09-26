@@ -25,9 +25,15 @@ describe("i18n", () => {
     expect(translateErrorDetail("en", new Error("socket exploded"))).toBe("socket exploded");
   });
 
-  it("formats quota exceeded details", () => {
+  it("formats quota enforcement details", () => {
     expect(translateErrorDetail("zh", {
       detail: { code: "quota_exceeded", scope_id: "app-a", resource: "tokens" },
     })).toBe("app-a 的 tokens 配额已超限。");
+    expect(translateErrorDetail("en", {
+      detail: { code: "quota_output_limit_required", scope_id: "app-a" },
+    })).toContain("max_tokens");
+    expect(translateErrorDetail("zh", {
+      detail: { code: "quota_cost_projection_unavailable", scope_id: "app-a" },
+    })).toContain("费用硬额度");
   });
 });
