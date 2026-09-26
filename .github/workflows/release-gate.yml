@@ -405,7 +405,7 @@ jobs:
               assert response.status == 200
           PY
 
-          docker exec freellm-gateway-ci python - <<'PY'
+          docker exec -i freellm-gateway-ci python - <<'PY'
           from pathlib import Path
           path = Path("/data/provider-secrets.json")
           assert path.is_file()
