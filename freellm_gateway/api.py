@@ -209,6 +209,19 @@ def create_app(
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/health/ready")
+    def readiness() -> dict[str, str]:
+        if repository is None:
+            raise HTTPException(status_code=503, detail="persistence is not configured")
+        if secrets is None:
+            raise HTTPException(status_code=503, detail="secret storage is not configured")
+        try:
+            with repository.database.connect() as connection:
+                connection.execute("SELECT 1").fetchone()
+        except sqlite3.Error as error:
+            raise HTTPException(status_code=503, detail="database is not ready") from error
+        return {"status": "ok", "database": "ok", "secret_storage": "ok"}
+
     @app.get("/")
     def service_info() -> dict:
         return {
