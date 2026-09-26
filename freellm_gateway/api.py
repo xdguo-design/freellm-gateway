@@ -1263,6 +1263,7 @@ def _quota_preflight(
         identity.application_id,
         projected_tokens=projection["projected_tokens"],
         projected_costs=projection["projected_costs"],
+        token_projection_complete=projection["token_projection_complete"],
         cost_projection_complete=projection["cost_projection_complete"],
     )
     for item in check.get("checks", []):
@@ -1285,7 +1286,15 @@ def _quota_preflight(
             headers["Retry-After"] = str(retry_after)
         except ValueError:
             pass
-    raise HTTPException(status_code=429, detail=violation, headers=headers)
+    status_code = (
+        422
+        if violation.get("code") in {
+            "quota_output_limit_required",
+            "quota_cost_projection_unavailable",
+        }
+        else 429
+    )
+    raise HTTPException(status_code=status_code, detail=violation, headers=headers)
 
 
 def _quota_response_headers(check: dict) -> dict[str, str]:
