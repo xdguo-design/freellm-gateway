@@ -644,6 +644,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="provider not found")
         if provider.protocol not in SUPPORTED_PROVIDER_PROTOCOLS:
             raise HTTPException(status_code=501, detail="provider model discovery is not supported")
+        _require_provider_base_url(provider.base_url)
         credential = payload.get("credential")
         if not isinstance(credential, str) or not credential.strip():
             raise HTTPException(status_code=422, detail="credential must be a non-empty string")
@@ -738,7 +739,9 @@ def create_app(
         provider_id = updates.get("provider_id", current.provider_id)
         if repository and not any(provider.id == provider_id for provider in repository.list_providers()):
             raise HTTPException(status_code=422, detail="provider must exist before updating a route")
-        for field in ("endpoint", "public_url", "public_docs_url"):
+        if updates.get("endpoint"):
+            _require_provider_base_url(updates["endpoint"])
+        for field in ("public_url", "public_docs_url"):
             if updates.get(field):
                 _require_public_url(updates[field], field)
         credential = payload.get("credential")
@@ -797,7 +800,7 @@ def create_app(
         if repository and not any(provider.id == route.provider_id for provider in repository.list_providers()):
             raise HTTPException(status_code=422, detail="provider must exist before adding a route")
         if route.endpoint:
-            _require_public_url(route.endpoint, "endpoint")
+            _require_provider_base_url(route.endpoint)
         if route.public_url:
             _require_public_url(route.public_url, "public_url")
         if route.public_docs_url:
@@ -901,7 +904,7 @@ def create_app(
             route = _route_from_payload(route_payload, priority=next_priority)
             route = replace(route, enabled=route_payload["enabled"])
             if route.endpoint:
-                _require_public_url(route.endpoint, "endpoint")
+                _require_provider_base_url(route.endpoint)
             for field in ("public_url", "public_docs_url"):
                 if getattr(route, field):
                     _require_public_url(getattr(route, field), field)
