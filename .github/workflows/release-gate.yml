@@ -35,7 +35,7 @@ jobs:
           python -m pip install -e ".[test]"
 
       - name: Compile
-        run: python -m compileall -q freellm_gateway tests
+        run: python -m compileall -q freellm_gateway tests scripts desktop/scripts
 
       - name: Full pytest
         run: python -m pytest -q
