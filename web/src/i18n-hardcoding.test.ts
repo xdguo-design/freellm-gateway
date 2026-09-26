@@ -21,4 +21,21 @@ describe("i18n source hygiene", () => {
       .map(({ path }) => path);
     expect(violations).toEqual([]);
   });
+
+  it("keeps shared technical labels behind translation keys", () => {
+    const forbidden = [
+      /<label>Provider(?: ID)?/,
+      /<label>Base URL/,
+      /<label>Reasoning Effort/,
+      /<label>API Key/,
+      /<th>Provider<\/th>/,
+      /<th>Token<\/th>/,
+      /<span>API Base<\/span>/,
+    ];
+    const violations = sourceFiles().flatMap((path) => {
+      const source = readFileSync(path, "utf8");
+      return forbidden.filter((pattern) => pattern.test(source)).map((pattern) => `${path}: ${pattern}`);
+    });
+    expect(violations).toEqual([]);
+  });
 });
