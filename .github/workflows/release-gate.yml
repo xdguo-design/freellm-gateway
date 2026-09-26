@@ -1,0 +1,355 @@
+name: release-gate
+
+on:
+  push:
+    branches:
+      - dev
+      - main
+      - feature/provider-platform-v2
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  python-matrix:
+    name: Python ${{ matrix.python-version }} full regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e ".[test]"
+
+      - name: Compile
+        run: python -m compileall -q freellm_gateway tests
+
+      - name: Full pytest
+        run: python -m pytest -q
+
+  browser-e2e:
+    name: Chromium React E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install locked web dependencies
+        run: npm ci --prefix web --no-audit --no-fund
+
+      - name: Install pinned browser test runner
+        run: npm install --prefix web --no-save --no-package-lock @playwright/test@1.55.0
+
+      - name: Install Chromium
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Start from source using run.sh
+        env:
+          FREELLM_GATEWAY_PORT: "18766"
+          FREELLM_GATEWAY_API_TOKEN: e2e-api-token
+          FREELLM_GATEWAY_ADMIN_TOKEN: e2e-admin-token
+          FREELLM_GATEWAY_DB: /tmp/freellm-browser-e2e.sqlite3
+        run: |
+          sh ./run.sh >/tmp/freellm-browser-e2e.log 2>&1 &
+          echo $! > /tmp/freellm-browser-e2e.pid
+          python - <<'PY'
+          import time
+          from urllib.request import urlopen
+
+          for _ in range(180):
+              try:
+                  with urlopen("http://127.0.0.1:18766/health", timeout=1) as response:
+                      assert response.status == 200
+                  break
+              except Exception:
+                  time.sleep(0.25)
+          else:
+              raise SystemExit("source launcher did not become healthy")
+          PY
+
+      - name: Run browser E2E
+        env:
+          FREELLM_E2E_BASE_URL: http://127.0.0.1:18766
+        working-directory: web
+        run: npx playwright test --config=playwright.config.ts
+
+      - name: Upload browser traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-e2e-failure
+          path: |
+            web/test-results/
+            /tmp/freellm-browser-e2e.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Stop source gateway
+        if: always()
+        run: |
+          if [ -f /tmp/freellm-browser-e2e.pid ]; then
+            kill "$(cat /tmp/freellm-browser-e2e.pid)" || true
+          fi
+
+  windows-runtime:
+    name: Windows source + wheel regression
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Parse PowerShell launch/build scripts
+        shell: pwsh
+        run: |
+          foreach ($file in @("run.ps1", "scripts/build_desktop.ps1")) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $file),
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -gt 0) {
+              $errors | Format-List
+              throw "PowerShell parse failed: $file"
+            }
+          }
+
+      - name: Smoke test Windows run.ps1 from source
+        shell: pwsh
+        run: |
+          $env:FREELLM_GATEWAY_API_TOKEN = "windows-source-api"
+          $env:FREELLM_GATEWAY_ADMIN_TOKEN = "windows-source-admin"
+          $env:FREELLM_GATEWAY_DB = Join-Path $env:RUNNER_TEMP "windows-source.sqlite3"
+          $stdout = Join-Path $env:RUNNER_TEMP "windows-source.out.log"
+          $stderr = Join-Path $env:RUNNER_TEMP "windows-source.err.log"
+          $launcher = Start-Process powershell -ArgumentList @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-File", ".\run.ps1",
+            "-NoBrowser", "-Port", "18767"
+          ) -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 180; $i++) {
+              try {
+                $health = Invoke-RestMethod "http://127.0.0.1:18767/health" -TimeoutSec 1
+                if ($health.status -eq "ok") {
+                  $ready = $true
+                  break
+                }
+              } catch {}
+              Start-Sleep -Milliseconds 500
+            }
+            if (-not $ready) {
+              Get-Content $stdout -ErrorAction SilentlyContinue
+              Get-Content $stderr -ErrorAction SilentlyContinue
+              throw "run.ps1 did not start a healthy gateway"
+            }
+            $admin = Invoke-WebRequest "http://127.0.0.1:18767/admin/" -UseBasicParsing
+            if ($admin.Content -notmatch '<div id="root"></div>') {
+              throw "run.ps1 did not serve the React admin shell"
+            }
+          } finally {
+            taskkill /PID $launcher.Id /T /F 2>$null | Out-Null
+          }
+
+      - name: Install test dependencies
+        shell: pwsh
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e ".[test]"
+
+      - name: React checks on Windows
+        shell: pwsh
+        run: |
+          npm ci --prefix web --no-audit --no-fund
+          npm run typecheck --prefix web
+          npm run test --prefix web
+          npm run build --prefix web
+
+      - name: Full pytest on Windows
+        run: python -m pytest -q
+
+      - name: Build wheel
+        shell: pwsh
+        run: |
+          $wheelDir = Join-Path $env:RUNNER_TEMP "freellm-wheel"
+          New-Item -ItemType Directory -Force $wheelDir | Out-Null
+          python -m pip wheel . --no-deps -w $wheelDir
+
+      - name: Smoke test installed wheel in clean Windows venv
+        shell: pwsh
+        run: |
+          $wheelDir = Join-Path $env:RUNNER_TEMP "freellm-wheel"
+          $venv = Join-Path $env:RUNNER_TEMP "freellm-runtime"
+          python -m venv $venv
+          $runtimePython = Join-Path $venv "Scripts\python.exe"
+          $wheel = (Get-ChildItem "$wheelDir\freellm_gateway-*.whl" | Select-Object -First 1).FullName
+          & $runtimePython -m pip install $wheel
+
+          $env:FREELLM_GATEWAY_API_TOKEN = "windows-wheel-api"
+          $env:FREELLM_GATEWAY_ADMIN_TOKEN = "windows-wheel-admin"
+          $env:FREELLM_GATEWAY_DB = Join-Path $env:RUNNER_TEMP "windows-wheel.sqlite3"
+          $stdout = Join-Path $env:RUNNER_TEMP "windows-wheel.out.log"
+          $stderr = Join-Path $env:RUNNER_TEMP "windows-wheel.err.log"
+          $gateway = Start-Process $runtimePython -ArgumentList @(
+            "-m", "freellm_gateway", "run",
+            "--host", "127.0.0.1",
+            "--port", "18768",
+            "--skip-web-build"
+          ) -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 120; $i++) {
+              try {
+                $health = Invoke-RestMethod "http://127.0.0.1:18768/health" -TimeoutSec 1
+                if ($health.status -eq "ok") {
+                  $ready = $true
+                  break
+                }
+              } catch {}
+              Start-Sleep -Milliseconds 250
+            }
+            if (-not $ready) {
+              Get-Content $stdout -ErrorAction SilentlyContinue
+              Get-Content $stderr -ErrorAction SilentlyContinue
+              throw "installed wheel did not start"
+            }
+            $admin = Invoke-WebRequest "http://127.0.0.1:18768/admin/" -UseBasicParsing
+            if ($admin.Content -notmatch '<div id="root"></div>') {
+              throw "installed wheel does not contain React admin"
+            }
+            $headers = @{ Authorization = "Bearer windows-wheel-admin" }
+            $overview = Invoke-RestMethod "http://127.0.0.1:18768/api/admin/overview" -Headers $headers
+            if ($overview.data.admin_base -ne "/api/admin") {
+              throw "installed wheel admin API smoke failed"
+            }
+          } finally {
+            if (-not $gateway.HasExited) {
+              Stop-Process -Id $gateway.Id -Force
+            }
+          }
+
+      - name: Upload Windows logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-runtime-failure
+          path: |
+            ${{ runner.temp }}/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  desktop-windows:
+    name: Windows Tauri desktop build + lifecycle smoke
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            desktop/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build desktop debug application
+        shell: pwsh
+        run: .\scripts\build_desktop.ps1 -Debug
+
+      - name: Verify desktop artifacts and bundled React
+        shell: pwsh
+        run: |
+          $exe = "desktop\src-tauri\target\debug\freellm-studio.exe"
+          if (-not (Test-Path $exe)) {
+            throw "Tauri debug executable missing"
+          }
+          $sidecar = "desktop\src-tauri\binaries\freellm-gateway\freellm-gateway.exe"
+          if (-not (Test-Path $sidecar)) {
+            throw "PyInstaller sidecar missing"
+          }
+          $react = "desktop\src-tauri\binaries\freellm-gateway\_internal\freellm_gateway\static\admin\index.html"
+          if (-not (Test-Path $react)) {
+            throw "React admin missing from packaged sidecar"
+          }
+
+      - name: Desktop lifecycle smoke
+        shell: pwsh
+        run: python desktop\scripts\smoke_test.py --exe desktop\src-tauri\target\debug\freellm-studio.exe
+
+      - name: Upload desktop logs/artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows-failure
+          path: |
+            desktop/src-tauri/target/debug/freellm-studio.exe
+            desktop/src-tauri/binaries/freellm-gateway/
+          if-no-files-found: ignore
+          retention-days: 3
+
+  release-gate:
+    name: RELEASE GATE
+    if: always()
+    needs:
+      - python-matrix
+      - browser-e2e
+      - windows-runtime
+      - desktop-windows
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every release check
+        env:
+          PYTHON_RESULT: ${{ needs.python-matrix.result }}
+          BROWSER_RESULT: ${{ needs.browser-e2e.result }}
+          WINDOWS_RESULT: ${{ needs.windows-runtime.result }}
+          DESKTOP_RESULT: ${{ needs.desktop-windows.result }}
+        run: |
+          printf 'python=%s\nbrowser=%s\nwindows=%s\ndesktop=%s\n' \
+            "$PYTHON_RESULT" "$BROWSER_RESULT" "$WINDOWS_RESULT" "$DESKTOP_RESULT"
+          test "$PYTHON_RESULT" = success
+          test "$BROWSER_RESULT" = success
+          test "$WINDOWS_RESULT" = success
+          test "$DESKTOP_RESULT" = success
