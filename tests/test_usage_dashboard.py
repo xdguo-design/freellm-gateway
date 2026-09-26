@@ -448,7 +448,11 @@ def test_monthly_tenant_and_application_quotas_report_used_and_remaining(tmp_pat
     response = client.post(
         "/v1/chat/completions",
         headers={"Authorization": f"Bearer {key}"},
-        json={"model": "remote-model", "messages": [{"role": "user", "content": "hello"}]},
+        json={
+            "model": "remote-model",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 1,
+        },
     )
     assert response.status_code == 200
 
@@ -522,14 +526,19 @@ def test_quota_cost_is_incomplete_when_usage_is_unpriced(tmp_path):
     client.put(
         "/api/admin/quotas/tenant/tenant-unpriced",
         headers=admin_headers(),
-        json={"token_limit": 100, "cost_limit": 1, "currency": "USD"},
+        json={"token_limit": 100, "currency": "USD"},
     )
 
-    client.post(
+    response = client.post(
         "/v1/chat/completions",
         headers={"Authorization": f"Bearer {key}"},
-        json={"model": "remote-model", "messages": [{"role": "user", "content": "hello"}]},
+        json={
+            "model": "remote-model",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 1,
+        },
     )
+    assert response.status_code == 200
 
     quota = repository.usage_summary(7, tenant_id="tenant-unpriced")["selected_quota"]
     assert quota["used_tokens"] == 17
