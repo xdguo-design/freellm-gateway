@@ -15,11 +15,21 @@ if (-not (Test-Path $VenvPython)) {
         throw "Python 3.10+ is required. Install Python and make sure 'python' is on PATH."
     }
     & $Python.Source -m venv .venv
+    if ($LASTEXITCODE -ne 0) {
+        throw "Creating the Python virtual environment failed with exit code $LASTEXITCODE."
+    }
 }
 
 & $VenvPython -m pip install -e .
+if ($LASTEXITCODE -ne 0) {
+    throw "Installing FreeLLM Gateway failed with exit code $LASTEXITCODE."
+}
+
 $RunArgs = @("-m", "freellm_gateway", "run", "--host", $HostAddress, "--port", "$Port")
 if (-not $NoBrowser) {
     $RunArgs += "--open-browser"
 }
 & $VenvPython @RunArgs
+if ($LASTEXITCODE -ne 0) {
+    throw "FreeLLM Gateway exited with code $LASTEXITCODE."
+}
