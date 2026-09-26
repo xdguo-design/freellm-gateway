@@ -608,6 +608,83 @@ def test_request_is_rejected_before_provider_when_application_token_quota_would_
     assert adapter.complete_calls == 0
 
 
+def test_token_quota_requires_explicit_output_limit_before_provider_call(tmp_path):
+    adapter = CountingUsageAdapter()
+    client, _ = make_usage_client(tmp_path, adapter)
+    client.post(
+        "/api/admin/tenants",
+        headers=admin_headers(),
+        json={"id": "tenant-bound", "name": "Tenant Bound"},
+    )
+    key = client.post(
+        "/api/admin/applications",
+        headers=admin_headers(),
+        json={"id": "app-bound", "tenant_id": "tenant-bound", "name": "App Bound"},
+    ).json()["api_key"]
+    client.put(
+        "/api/admin/quotas/application/app-bound",
+        headers=admin_headers(),
+        json={"token_limit": 10000, "currency": "USD"},
+    )
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": "remote-model",
+            "messages": [{"role": "user", "content": "hello"}],
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "quota_output_limit_required"
+    assert detail["resource"] == "tokens"
+    assert detail["required_field"] == "max_tokens or max_completion_tokens"
+    assert adapter.complete_calls == 0
+
+
+def test_cost_quota_rejects_request_when_route_price_cannot_be_projected(tmp_path):
+    adapter = CountingUsageAdapter()
+    client, _ = make_usage_client(tmp_path, adapter)
+    client.post(
+        "/api/admin/tenants",
+        headers=admin_headers(),
+        json={"id": "tenant-cost-bound", "name": "Tenant Cost Bound"},
+    )
+    key = client.post(
+        "/api/admin/applications",
+        headers=admin_headers(),
+        json={
+            "id": "app-cost-bound",
+            "tenant_id": "tenant-cost-bound",
+            "name": "App Cost Bound",
+        },
+    ).json()["api_key"]
+    client.put(
+        "/api/admin/quotas/application/app-cost-bound",
+        headers=admin_headers(),
+        json={"cost_limit": 5.0, "currency": "USD"},
+    )
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": "remote-model",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 10,
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "quota_cost_projection_unavailable"
+    assert detail["resource"] == "cost"
+    assert detail["projection_complete"] is False
+    assert adapter.complete_calls == 0
+
+
 def test_cost_quota_uses_projected_route_price_before_provider_call(tmp_path):
     adapter = CountingUsageAdapter()
     client, _ = make_usage_client(
