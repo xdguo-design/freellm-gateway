@@ -1,8 +1,5 @@
 name: tests
 
-permissions:
-  contents: write
-
 on:
   push:
     branches:
@@ -34,18 +31,7 @@ jobs:
           node-version: "22"
 
       - name: Install web dependencies
-        run: npm install --prefix web --no-audit --no-fund
-
-      - name: Commit generated web lockfile
-        if: github.event_name == 'push' && github.ref == 'refs/heads/feature/provider-platform-v2'
-        run: |
-          if ! git ls-files --error-unmatch web/package-lock.json >/dev/null 2>&1; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add web/package-lock.json
-            git commit -m "chore(web): lock frontend dependencies"
-            git push
-          fi
+        run: npm ci --prefix web --no-audit --no-fund
 
       - name: Typecheck React TypeScript
         run: npm run typecheck --prefix web
