@@ -38,6 +38,40 @@ def make_client(routes=None, adapters=None, **kwargs):
     return TestClient(create_app(gateway=gateway, api_token="api", admin_token="admin", **kwargs)), gateway
 
 
+def test_readiness_requires_database_and_secret_storage(tmp_path):
+    repository = Repository(Database(tmp_path / "gateway.sqlite3"))
+    ready = TestClient(
+        create_app(
+            ModelGateway([], {}),
+            repository=repository,
+            secrets=FakeSecrets(),
+            api_token="api",
+            admin_token="admin",
+        )
+    )
+    unavailable = TestClient(
+        create_app(
+            ModelGateway([], {}),
+            repository=repository,
+            secrets=None,
+            api_token="api",
+            admin_token="admin",
+        )
+    )
+
+    response = ready.get("/health/ready")
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "database": "ok",
+        "secret_storage": "ok",
+    }
+
+    response = unavailable.get("/health/ready")
+    assert response.status_code == 503
+    assert response.json()["detail"] == "secret storage is not configured"
+
+
 def test_public_root_describes_openai_compatible_api():
     client, _ = make_client()
 
@@ -77,6 +111,218 @@ def test_admin_can_save_custom_provider_and_route(tmp_path):
     assert repository.list_providers()[0].id == "custom-openai"
     assert repository.list_routes()[0].remote_model == "custom-model"
     assert "secret" not in response.text
+
+
+def test_admin_provider_update_refreshes_runtime_adapter_and_delete_requires_no_routes(tmp_path):
+    repository = Repository(Database(tmp_path / "gateway.sqlite3"))
+    repository.initialize()
+    repository.save_provider(
+        Provider("p", "Provider", "openai", "https://old.example/v1", "https://old.example")
+    )
+    secrets = FakeSecrets()
+    credential_ref = secrets.save("route", "secret")
+    route = ModelRoute(
+        id="route",
+        provider_id="p",
+        remote_model="m",
+        priority=1,
+        credential_ref=credential_ref,
+    )
+    repository.save_route(route)
+    gateway = ModelGateway([route], {})
+    app = create_app(
+        gateway,
+        repository=repository,
+        secrets=secrets,
+        api_token="api",
+        admin_token="admin",
+    )
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer admin"}
+
+    updated = client.put(
+        "/api/admin/providers/p",
+        headers=headers,
+        json={
+            "id": "p",
+            "name": "Provider Updated",
+            "protocol": "openai",
+            "base_url": "https://new.example/v1",
+            "official_url": "https://new.example",
+        },
+    )
+
+    assert updated.status_code == 200
+    assert repository.list_providers()[0].name == "Provider Updated"
+    assert gateway.adapters["route"].endpoint == "https://new.example/v1/chat/completions"
+
+    blocked = client.delete("/api/admin/providers/p", headers=headers)
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"] == "provider has model routes"
+
+    removed_route = client.delete("/api/admin/routes/route", headers=headers)
+    assert removed_route.status_code == 204
+    deleted = client.delete("/api/admin/providers/p", headers=headers)
+    assert deleted.status_code == 204
+    assert repository.list_providers() == []
+
+
+def test_admin_provider_id_is_immutable(tmp_path):
+    repository = Repository(Database(tmp_path / "gateway.sqlite3"))
+    repository.initialize()
+    repository.save_provider(
+        Provider("p", "Provider", "openai", "https://api.example/v1", "https://example.com")
+    )
+    client = TestClient(
+        create_app(
+            ModelGateway([], {}),
+            repository=repository,
+            api_token="api",
+            admin_token="admin",
+        )
+    )
+
+    response = client.put(
+        "/api/admin/providers/p",
+        headers={"Authorization": "Bearer admin"},
+        json={
+            "id": "other",
+            "name": "Provider",
+            "protocol": "openai",
+            "base_url": "https://api.example/v1",
+            "official_url": "https://example.com",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "provider id cannot be changed"
+
+
+def test_bulk_route_creation_preserves_explicit_catalog_status(tmp_path):
+    repository = Repository(Database(tmp_path / "gateway.sqlite3"))
+    app = create_app(
+        ModelGateway([], {}),
+        repository=repository,
+        secrets=FakeSecrets(),
+        api_token="api",
+        admin_token="admin",
+    )
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer admin"}
+    provider = {
+        "id": "catalog-provider",
+        "name": "Catalog Provider",
+        "protocol": "openai",
+        "base_url": "https://catalog.example/v1",
+        "official_url": "https://catalog.example",
+    }
+
+    published = client.post(
+        "/api/admin/routes/bulk",
+        headers=headers,
+        json={
+            "provider": provider,
+            "models": [{"remote_model": "published-model"}],
+            "catalog_status": "published",
+        },
+    )
+    draft = client.post(
+        "/api/admin/routes/bulk",
+        headers=headers,
+        json={
+            "provider": provider,
+            "models": [{"remote_model": "draft-model"}],
+        },
+    )
+
+    assert published.status_code == 200
+    assert draft.status_code == 200
+    routes = {route.remote_model: route for route in repository.list_routes()}
+    assert routes["published-model"].catalog_status == "published"
+    assert routes["draft-model"].catalog_status == "draft"
+
+
+def test_bulk_route_creation_rejects_provider_identity_drift(tmp_path):
+    repository = Repository(Database(tmp_path / "gateway.sqlite3"))
+    repository.initialize()
+    repository.save_provider(
+        Provider("p", "Provider", "openai", "https://old.example/v1", "https://old.example")
+    )
+    client = TestClient(
+        create_app(
+            ModelGateway([], {}),
+            repository=repository,
+            secrets=FakeSecrets(),
+            api_token="api",
+            admin_token="admin",
+        )
+    )
+
+    response = client.post(
+        "/api/admin/routes/bulk",
+        headers={"Authorization": "Bearer admin"},
+        json={
+            "provider": {
+                "id": "p",
+                "name": "Provider",
+                "protocol": "openai",
+                "base_url": "https://new.example/v1",
+                "official_url": "https://new.example",
+            },
+            "models": [{"remote_model": "m"}],
+            "credential": "secret",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "provider id already belongs to another base URL"
+    assert repository.list_providers()[0].base_url == "https://old.example/v1"
+    assert repository.list_routes() == []
+
+
+def test_admin_rejects_invalid_catalog_status(tmp_path):
+    repository = Repository(Database(tmp_path / "gateway.sqlite3"))
+    repository.initialize()
+    repository.save_provider(
+        Provider("p", "Provider", "openai", "https://api.example/v1", "https://example.com")
+    )
+    route = ModelRoute(id="route", provider_id="p", remote_model="m", priority=1)
+    repository.save_route(route)
+    client = TestClient(
+        create_app(
+            ModelGateway([route], {}),
+            repository=repository,
+            api_token="api",
+            admin_token="admin",
+        )
+    )
+    headers = {"Authorization": "Bearer admin"}
+
+    patched = client.patch(
+        "/api/admin/routes/route",
+        headers=headers,
+        json={"catalog_status": "public-ish"},
+    )
+    bulk = client.post(
+        "/api/admin/routes/bulk",
+        headers=headers,
+        json={
+            "provider": {
+                "id": "p",
+                "name": "Provider",
+                "protocol": "openai",
+                "base_url": "https://api.example/v1",
+                "official_url": "https://example.com",
+            },
+            "models": [{"remote_model": "m2"}],
+            "catalog_status": "public-ish",
+        },
+    )
+
+    assert patched.status_code == 422
+    assert bulk.status_code == 422
+    assert "draft or published" in patched.json()["detail"]
+    assert "draft or published" in bulk.json()["detail"]
 
 
 def test_admin_overview_and_health_are_available_with_admin_token():

@@ -29,32 +29,33 @@ desktop/
 
 ## 构建步骤
 
+推荐直接从仓库根目录执行统一脚本：
+
 ```powershell
-# 1. 重建网关 sidecar（onedir 模式：免解压，启动只需 2-3 秒；onefile 每次启动要解压 200MB 并被 Defender 全量扫描，冷启动十几秒）
-cd D:\WorkSpace\freellm-gateway
-python -m PyInstaller --onedir --noconsole --name freellm-gateway --noconfirm `
-  --distpath desktop/sidecar --workpath %TEMP%\pyinstaller-build --specpath %TEMP%\pyinstaller-build `
-  --add-data "D:\WorkSpace\freellm-gateway\freellm_gateway\templates;freellm_gateway\templates" `
-  --hidden-import uvicorn.loops.auto `
-  --hidden-import uvicorn.protocols.http.auto `
-  --hidden-import uvicorn.protocols.websockets.auto `
-  --hidden-import uvicorn.protocols.websockets.websockets_impl `
-  --hidden-import uvicorn.lifespan.on `
-  freellm_gateway/desktop_entry.py
-
-# 2. 同步到资源目录（tauri.conf.json 的 resources 映射：binaries/freellm-gateway -> sidecar/）
-rm -rf desktop/src-tauri/binaries/freellm-gateway
-cp -r desktop/sidecar/freellm-gateway desktop/src-tauri/binaries/freellm-gateway
-
-# 3. 构建应用
-cd desktop
-npm install
-npx tauri build              # 产物：NSIS 安装包 + target/release/freellm-studio.exe
-npx tauri build --debug --no-bundle   # 快速验证，不打包安装器
+.\scripts\build_desktop.ps1
 ```
 
-产物位置：`src-tauri/target/release/freellm-studio.exe`（便携版，sidecar 在同目录）与
-`src-tauri/target/release/bundle/nsis/*-setup.exe`（安装包）。
+快速 Debug 验证：
+
+```powershell
+.\scripts\build_desktop.ps1 -Debug
+```
+
+脚本会自动完成：
+
+1. 安装并构建 `web/` 的 React/TypeScript 管理后台；
+2. 用 PyInstaller 构建 Python gateway sidecar，并同时打包 `templates/` 与 `static/admin/`；
+3. 把 sidecar 同步到 Tauri resources；
+4. 安装桌面依赖并执行 Tauri build。
+
+正式产物位置：
+
+```text
+desktop/src-tauri/target/release/freellm-studio.exe
+desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+```
+
+React 管理台和 Web 版共用同一份生产 bundle，不再维护单独的桌面 UI。Tauri 运行时通过 `window.__FREELLM_GATEWAY_PORT__` 将 React API 请求定向到本机 sidecar `127.0.0.1:18900`，Admin Token 也使用与 Web 管理台一致的 sessionStorage key。
 
 ## GA4 页面打开统计
 

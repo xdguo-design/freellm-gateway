@@ -32,4 +32,8 @@ addopts = "-ra"
 include = ["freellm_gateway*"]
 
 [tool.setuptools.package-data]
-freellm_gateway = ["templates/*.html"]
+freellm_gateway = [
+  "templates/*.html",
+  "static/admin/*",
+  "static/admin/assets/*",
+]

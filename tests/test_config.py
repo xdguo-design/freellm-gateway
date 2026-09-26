@@ -1,3 +1,5 @@
+import pytest
+
 from freellm_gateway.config import Settings
 
 
@@ -29,3 +31,12 @@ def test_catalog_source_defaults_to_freellm_top(monkeypatch):
     settings = Settings.from_env()
 
     assert str(settings.catalog_source) == "https://freellm.top/data/offers.json"
+
+
+def test_cloud_mode_requires_explicit_api_and_admin_tokens(monkeypatch):
+    monkeypatch.setenv("FREELLM_GATEWAY_REQUIRE_EXPLICIT_TOKENS", "1")
+    monkeypatch.delenv("FREELLM_GATEWAY_API_TOKEN", raising=False)
+    monkeypatch.delenv("FREELLM_GATEWAY_ADMIN_TOKEN", raising=False)
+
+    with pytest.raises(RuntimeError, match="are required"):
+        Settings.from_env()

@@ -4,6 +4,48 @@
 
 ![FreeLLM Studio](docs/screenshots/freellm-studio-overview.png)
 
+## 快速运行
+
+### Windows：一条命令
+
+仓库根目录执行：
+
+```powershell
+.\run.ps1
+```
+
+脚本会自动创建 `.venv`、安装 Python 包，并在首次启动时自动安装/构建 React/TypeScript 管理后台，然后打开：
+
+```text
+http://127.0.0.1:8765/admin/
+```
+
+之后再次运行会复用已经生成的前端 bundle。需要只启动服务、不自动打开浏览器：
+
+```powershell
+.\run.ps1 -NoBrowser
+```
+
+### macOS / Linux
+
+```bash
+sh ./run.sh
+```
+
+### 从 CI wheel 运行
+
+GitHub Actions 的成功构建会产生 artifact：`freellm-gateway-runnable-wheel`。下载 wheel 后：
+
+```bash
+python -m venv .venv
+# Windows: .\.venv\Scripts\activate
+# macOS/Linux: source .venv/bin/activate
+pip install freellm_gateway-*.whl
+python -m freellm_gateway run --open-browser
+```
+
+wheel 已包含 React 管理后台，**运行时不需要 Node.js**。
+
 ## 功能
 
 - 统一管理多个 Provider 和模型
@@ -13,7 +55,7 @@
 - 支持文本、长上下文、视觉和生图能力标签
 - 从 `freellm.top` 目录自动带出 Provider、注册地址、文档和免费额度说明
 - 管理台支持同时选择多个连接，并为每个连接分别验证凭据、选择模型后批量保存
-- API Key 仅保存在本机凭据存储，不写入目录导出或接口响应
+- Provider API Key 在桌面端使用系统凭据存储，在云端使用加密持久文件；均不写入目录导出或接口响应
 - Windows 桌面版启动时自动运行本地网关，不弹出 CMD 窗口
 
 ## 桌面版
@@ -26,19 +68,42 @@ desktop/src-tauri/target/release/freellm-studio.exe
 
 桌面版会自动启动网关、打开管理台，并将 Provider 注册页转交系统浏览器。
 
-构建桌面版需要 Node.js、Rust stable、Visual Studio C++ Build Tools 和 Python 3.10+：
+构建桌面版需要 Node.js、Rust stable、Visual Studio C++ Build Tools 和 Python 3.10+。仓库根目录执行：
 
 ```powershell
-cd D:\WorkSpace\freellm-gateway
-& D:\Python\Python310\python.exe -m PyInstaller --onedir --noconsole --name freellm-gateway --noconfirm `
-  --distpath desktop/sidecar --add-data 'D:\WorkSpace\freellm-gateway\freellm_gateway\templates;freellm_gateway\templates' `
-  freellm_gateway/desktop_entry.py
-cd desktop
-npm install
-npm run build
+.\scripts\build_desktop.ps1
+```
+
+脚本会依次构建 React 管理台、带 React 静态资源的 Python sidecar，并构建 Tauri/NSIS 桌面应用。快速 Debug 验证：
+
+```powershell
+.\scripts\build_desktop.ps1 -Debug
 ```
 
 更多桌面构建说明见 [`desktop/README.md`](desktop/README.md)。
+
+## 单实例云部署
+
+仓库已提供生产 Docker 镜像、`/data` 持久卷约定、加密 Provider 密钥存储、
+`/health/ready` 就绪检查以及 Caddy 自动 HTTPS 示例。
+
+当前云部署必须保持 **1 个应用实例 / 1 个副本**；SQLite 与 in-flight 配额
+reservation 还不是多实例共享架构。完整步骤见
+[`docs/CLOUD_DEPLOYMENT.md`](docs/CLOUD_DEPLOYMENT.md)。
+
+快速构建：
+
+```bash
+docker build -t freellm-gateway:local .
+```
+
+自托管 VPS 可使用：
+
+```bash
+cp .env.cloud.example .env.cloud
+# 填写真实域名、API/Admin Token 和 Fernet Secret Key
+docker compose --env-file .env.cloud -f docker-compose.cloud.yml up -d --build
+```
 
 ## 开发运行
 
@@ -47,7 +112,7 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[test]"
 python -m pytest -q
-python -m freellm_gateway.cli run --host 127.0.0.1 --port 8765
+python -m freellm_gateway run --host 127.0.0.1 --port 8765 --open-browser
 ```
 
 管理页面：`http://127.0.0.1:8765/admin`
@@ -106,11 +171,21 @@ Base URL：https://api.groq.com/openai/v1
 
 编辑模型路由时，可在“推理强度”中填写 `medium`、`low` 或 `high`。该值作为路由默认值；客户端请求如果自行传入 `reasoning_effort`，则以客户端值为准。
 
-所有请求使用：
+所有请求默认支持：
 
 ```http
 Authorization: Bearer <FREELLM_GATEWAY_API_TOKEN>
 ```
+
+也可以使用代理兼容头：
+
+```http
+X-Free-LLM-Token: <FREELLM_GATEWAY_API_TOKEN>
+```
+
+在 WorkBuddy 托管环境中，反向代理会占用 `Authorization`，因此调用
+`/v1/*` 时应使用 `X-Free-LLM-Token`。两种方式在网关内同时保留，
+自定义头存在时优先使用它。
 
 ```powershell
 $headers = @{ Authorization = "Bearer $env:FREELLM_GATEWAY_API_TOKEN" }

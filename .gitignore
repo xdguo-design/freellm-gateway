@@ -3,6 +3,8 @@ __pycache__/
 .pytest_cache/
 *.py[cod]
 .env
+.env.*
+!.env.cloud.example
 data/*.sqlite3
 data/*.sqlite3-*
 data/*.json
@@ -11,3 +13,7 @@ logs/
 dist/
 build/
 *.egg-info/
+
+# React/TypeScript admin console
+web/node_modules/
+freellm_gateway/static/admin/

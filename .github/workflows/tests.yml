@@ -1,0 +1,131 @@
+name: tests
+
+on:
+  push:
+    branches:
+      - dev
+      - main
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Python test dependencies
+        run: python -m pip install -U pip && python -m pip install -e ".[test]"
+
+      - name: Compile Python
+        run: python -m compileall -q freellm_gateway tests scripts desktop/scripts
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install web dependencies
+        run: npm ci --prefix web --no-audit --no-fund
+
+      - name: Typecheck React TypeScript
+        run: npm run typecheck --prefix web
+
+      - name: Test React TypeScript
+        run: npm run test --prefix web
+
+      - name: Build React admin
+        run: npm run build --prefix web
+
+      - name: Verify Python wheel contains React admin
+        run: |
+          python -m pip wheel . --no-deps -w /tmp/freellm-wheel
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          wheel = next(Path("/tmp/freellm-wheel").glob("freellm_gateway-*.whl"))
+          with ZipFile(wheel) as archive:
+              names = set(archive.namelist())
+          assert "freellm_gateway/static/admin/index.html" in names
+          assert any(name.startswith("freellm_gateway/static/admin/assets/") and name.endswith(".js") for name in names)
+          assert any(name.startswith("freellm_gateway/static/admin/assets/") and name.endswith(".css") for name in names)
+          PY
+
+      - name: Smoke test installed runnable wheel
+        run: |
+          python -m venv /tmp/freellm-runtime-venv
+          /tmp/freellm-runtime-venv/bin/python -m pip install /tmp/freellm-wheel/freellm_gateway-*.whl
+          export FREELLM_GATEWAY_API_TOKEN=ci-api-token
+          export FREELLM_GATEWAY_ADMIN_TOKEN=ci-admin-token
+          export FREELLM_GATEWAY_DB=/tmp/freellm-runtime.sqlite3
+          /tmp/freellm-runtime-venv/bin/python -m freellm_gateway run --host 127.0.0.1 --port 18765 --skip-web-build >/tmp/freellm-runtime.log 2>&1 &
+          GATEWAY_PID=$!
+          trap 'kill $GATEWAY_PID || true' EXIT
+          python - <<'PY'
+          import json
+          import time
+          from urllib.request import Request, urlopen
+
+          base = "http://127.0.0.1:18765"
+          last_error = None
+          for _ in range(50):
+              try:
+                  with urlopen(base + "/health", timeout=1) as response:
+                      assert response.status == 200
+                  break
+              except Exception as error:
+                  last_error = error
+                  time.sleep(0.1)
+          else:
+              raise SystemExit(f"gateway did not start: {last_error}")
+
+          with urlopen(base + "/admin/", timeout=2) as response:
+              html = response.read().decode("utf-8")
+          assert '<div id="root"></div>' in html
+          assert "/assets/" in html or "./assets/" in html
+
+          request = Request(
+              base + "/api/admin/overview",
+              headers={"Authorization": "Bearer ci-admin-token"},
+          )
+          with urlopen(request, timeout=2) as response:
+              payload = json.loads(response.read().decode("utf-8"))
+          assert "data" in payload
+          assert payload["data"]["admin_base"] == "/api/admin"
+          PY
+          kill $GATEWAY_PID
+          wait $GATEWAY_PID || true
+          trap - EXIT
+
+      - name: Check legacy admin JavaScript syntax
+        run: |
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          html = Path("freellm_gateway/templates/admin.html").read_text(encoding="utf-8")
+          scripts = re.findall(r"<script>(.*?)</script>", html, re.S)
+          if not scripts:
+              raise SystemExit("admin.html contains no inline script")
+          Path("/tmp/freellm-admin-legacy.js").write_text("\n".join(scripts), encoding="utf-8")
+          PY
+          node --check /tmp/freellm-admin-legacy.js
+
+      - name: Run Python test suite
+        run: python -m pytest -q
+
+      - name: Upload runnable wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: freellm-gateway-runnable-wheel
+          path: /tmp/freellm-wheel/*.whl
+          if-no-files-found: error
+          retention-days: 14

@@ -133,13 +133,20 @@ class ModelGateway:
         self._record_success(route, elapsed, source=source)
         return result
 
-    async def complete(self, payload: dict, capability: str | None = None) -> dict:
+    async def complete(
+        self,
+        payload: dict,
+        capability: str | None = None,
+        usage_context: Mapping[str, str] | None = None,
+    ) -> dict:
+        usage_context = dict(usage_context or {})
         requested_model = payload.get("model", "auto")
         capability = capability or infer_capability(payload)
         request_id = uuid4().hex
         candidates = self._candidates(requested_model, capability)
         if not candidates:
             self._log_connection(
+                    usage_context=usage_context,
                 request_id=request_id, requested_model=requested_model, capability=capability,
                 stream=False, attempt=0, route=None, status="failed", elapsed_ms=0,
                 error_kind="no_available_model",
@@ -159,6 +166,7 @@ class ModelGateway:
                 error = ProviderError("missing_adapter", 500, route.id, retriable=False)
                 errors.append(error)
                 self._log_connection(
+                    usage_context=usage_context,
                     request_id=request_id, requested_model=requested_model, capability=capability,
                     stream=False, attempt=attempt, route=route, status="failed", elapsed_ms=0,
                     error_kind=error.kind,
@@ -179,6 +187,7 @@ class ModelGateway:
                 if requested_model == "auto":
                     self._promote_route(route.id)
                 self._log_connection(
+                    usage_context=usage_context,
                     request_id=request_id, requested_model=requested_model, capability=capability,
                     stream=False, attempt=attempt, route=route, status="success",
                     elapsed_ms=int((time.monotonic() - started) * 1000), usage=extract_usage(response),
@@ -190,6 +199,7 @@ class ModelGateway:
                     self._demote_route(route.id)
                 errors.append(error)
                 self._log_connection(
+                    usage_context=usage_context,
                     request_id=request_id, requested_model=requested_model, capability=capability,
                     stream=False, attempt=attempt, route=route, status="failed",
                     elapsed_ms=int((time.monotonic() - started) * 1000), error_kind=error.kind,
@@ -201,6 +211,7 @@ class ModelGateway:
                     self._demote_route(route.id)
                 errors.append(protocol_error)
                 self._log_connection(
+                    usage_context=usage_context,
                     request_id=request_id, requested_model=requested_model, capability=capability,
                     stream=False, attempt=attempt, route=route, status="failed",
                     elapsed_ms=int((time.monotonic() - started) * 1000), error_kind=protocol_error.kind,
@@ -245,13 +256,19 @@ class ModelGateway:
             raise protocol_error from error
         self._record_success(route, (time.monotonic() - started) * 1000)
 
-    async def stream(self, payload: dict) -> AsyncIterator[bytes]:
+    async def stream(
+        self,
+        payload: dict,
+        usage_context: Mapping[str, str] | None = None,
+    ) -> AsyncIterator[bytes]:
+        usage_context = dict(usage_context or {})
         requested_model = payload.get("model", "auto")
         capability = infer_capability(payload)
         request_id = uuid4().hex
         candidates = self._candidates(requested_model, capability)
         if not candidates:
             self._log_connection(
+                    usage_context=usage_context,
                 request_id=request_id, requested_model=requested_model, capability=capability,
                 stream=True, attempt=0, route=None, status="failed", elapsed_ms=0,
                 error_kind="no_available_model",
@@ -270,6 +287,7 @@ class ModelGateway:
                 error = ProviderError("stream_not_supported", 501, route.id, retriable=False)
                 errors.append(error)
                 self._log_connection(
+                    usage_context=usage_context,
                     request_id=request_id, requested_model=requested_model, capability=capability,
                     stream=True, attempt=attempt, route=route, status="failed", elapsed_ms=0,
                     error_kind=error.kind,
@@ -296,6 +314,7 @@ class ModelGateway:
                 if requested_model == "auto":
                     self._promote_route(route.id)
                 self._log_connection(
+                    usage_context=usage_context,
                     request_id=request_id, requested_model=requested_model, capability=capability,
                     stream=True, attempt=attempt, route=route, status="success",
                     elapsed_ms=elapsed_ms, usage=usage,
@@ -307,6 +326,7 @@ class ModelGateway:
                     self._demote_route(route.id)
                 if emitted:
                     self._log_connection(
+                    usage_context=usage_context,
                         request_id=request_id, requested_model=requested_model, capability=capability,
                         stream=True, attempt=attempt, route=route, status="failed",
                         elapsed_ms=int((time.monotonic() - started) * 1000), error_kind=error.kind,
@@ -315,6 +335,7 @@ class ModelGateway:
                     raise
                 errors.append(error)
                 self._log_connection(
+                    usage_context=usage_context,
                     request_id=request_id, requested_model=requested_model, capability=capability,
                     stream=True, attempt=attempt, route=route, status="failed",
                     elapsed_ms=int((time.monotonic() - started) * 1000), error_kind=error.kind,
@@ -327,6 +348,7 @@ class ModelGateway:
                     self._demote_route(route.id)
                 if emitted:
                     self._log_connection(
+                    usage_context=usage_context,
                         request_id=request_id, requested_model=requested_model, capability=capability,
                         stream=True, attempt=attempt, route=route, status="failed",
                         elapsed_ms=int((time.monotonic() - started) * 1000), error_kind=protocol_error.kind,
@@ -335,12 +357,16 @@ class ModelGateway:
                     raise protocol_error from error
                 errors.append(protocol_error)
                 self._log_connection(
+                    usage_context=usage_context,
                     request_id=request_id, requested_model=requested_model, capability=capability,
                     stream=True, attempt=attempt, route=route, status="failed",
                     elapsed_ms=int((time.monotonic() - started) * 1000), error_kind=protocol_error.kind,
                     usage=usage,
                 )
         raise ProviderError("all_providers_failed", 503, "; ".join(str(error) for error in errors), retriable=False)
+
+    def candidates(self, requested_model: str, capability: str) -> list[ModelRoute]:
+        return self._candidates(requested_model, capability)
 
     def _candidates(self, requested_model: str, capability: str) -> list[ModelRoute]:
         now = time.monotonic()
@@ -433,15 +459,20 @@ class ModelGateway:
         elapsed_ms: int,
         error_kind: str | None = None,
         usage: dict | None = None,
+        usage_context: Mapping[str, str] | None = None,
     ) -> None:
         if self.on_connection_logged is None:
             return
+        identity = dict(usage_context or {})
         entry = {
             "request_id": request_id,
+            "tenant_id": identity.get("tenant_id") or "system",
+            "application_id": identity.get("application_id") or "legacy-global",
             "requested_model": requested_model,
             "capability": capability,
             "stream": stream,
             "attempt": attempt,
+            "route_id": route.id if route else None,
             "provider_id": route.provider_id if route else None,
             "remote_model": route.remote_model if route else None,
             "status": status,

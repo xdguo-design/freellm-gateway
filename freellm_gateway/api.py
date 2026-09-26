@@ -1,4 +1,6 @@
 from dataclasses import replace
+from datetime import datetime, timezone
+import json
 from hashlib import sha1
 from ipaddress import ip_address
 import os
@@ -10,10 +12,10 @@ from typing import Annotated
 
 import httpx
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
 from .adapters.anthropic import AnthropicAdapter, anthropic_messages_endpoint
@@ -23,11 +25,12 @@ from .adapters.openai import OpenAICompatibleAdapter
 from .catalog import export_catalog, sync_catalog_to_site
 from .connection_log import ConnectionLogger
 from .discovery import discover_new_routes
-from .models import Provider, SUPPORTED_PROVIDER_PROTOCOLS
+from .models import Provider, RequestIdentity, SUPPORTED_CATALOG_STATUSES, SUPPORTED_PROVIDER_PROTOCOLS
+from .network_safety import UnsafeProviderTarget, validate_provider_target
 from .repository import Repository
 from .runtime import build_gateway
 from .runtime import adapter_for_route
-from .service import ModelGateway
+from .service import ModelGateway, infer_capability
 from .site_catalog import fetch_public_catalog, model_offers
 
 
@@ -89,8 +92,8 @@ def create_app(
             "http://127.0.0.1",
         ],
         allow_credentials=False,
-        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "X-Free-LLM-Token", "Content-Type"],
     )
     app.state.gateway = gateway
     app.state.repository = repository
@@ -106,14 +109,52 @@ def create_app(
             str(app.state.logs_path.with_name("gateway-connections.jsonl")),
         )
     )
-    gateway.on_connection_logged = app.state.connection_log.append
+    admin_dist_override = os.getenv("FREELLM_GATEWAY_ADMIN_DIST")
+    app.state.admin_dist = (
+        Path(admin_dist_override)
+        if admin_dist_override
+        else Path(__file__).with_name("static").joinpath("admin")
+    )
+    app.state.admin_index = app.state.admin_dist.joinpath("index.html")
+    admin_assets = app.state.admin_dist.joinpath("assets")
+    if admin_assets.is_dir():
+        app.mount(
+            "/admin/assets",
+            StaticFiles(directory=admin_assets),
+            name="admin-assets",
+        )
+    def persist_connection(entry: dict) -> None:
+        app.state.connection_log.append(entry)
+        if repository is not None:
+            repository.save_usage_from_connection(entry)
+
+    gateway.on_connection_logged = persist_connection
+
+    def _access_token(
+        authorization: str | None,
+        forwarded_token: str | None = None,
+    ) -> str | None:
+        if isinstance(forwarded_token, str) and forwarded_token:
+            return forwarded_token
+        if isinstance(authorization, str) and authorization.startswith("Bearer "):
+            return authorization[7:]
+        return None
 
     def require_token(
-        authorization: Annotated[str | None, Header()] = None,
+        authorization: str | None = None,
+        forwarded_token: str | None = None,
         expected: str = api_token,
-    ) -> None:
-        if authorization != f"Bearer {expected}":
+    ) -> RequestIdentity:
+        token = _access_token(authorization, forwarded_token)
+        if token == expected:
+            return RequestIdentity("system", "legacy-global", "global_token")
+        if token is None:
             raise HTTPException(status_code=401, detail="invalid bearer token")
+        if repository is not None:
+            application = repository.verify_application_key(token)
+            if application is not None:
+                return RequestIdentity(application.tenant_id, application.id, "application_key")
+        raise HTTPException(status_code=401, detail="invalid bearer token")
 
     def require_admin(request: Request, authorization: str | None) -> None:
         host = request.client.host if request.client else None
@@ -123,7 +164,8 @@ def create_app(
                     return
             except ValueError:
                 pass
-        if authorization != f"Bearer {admin_token}":
+        token = _access_token(authorization, request.headers.get("x-free-llm-token"))
+        if token != admin_token:
             raise HTTPException(status_code=401, detail="invalid admin token")
 
     def route_json(route):
@@ -142,6 +184,11 @@ def create_app(
             "enabled": route.enabled,
             "health": route.health.value,
             "reasoning_effort": route.reasoning_effort,
+            "pricing": {
+                "currency": route.pricing_currency,
+                "input_per_million": route.input_price_per_million,
+                "output_per_million": route.output_price_per_million,
+            },
             "public_url": route.public_url,
             "public_docs_url": route.public_docs_url,
             "free_summary": route.free_summary,
@@ -159,9 +206,39 @@ def create_app(
             },
         }
 
+    async def refresh_provider_adapters(provider: Provider) -> None:
+        for route in list(gateway.routes):
+            if route.provider_id != provider.id:
+                continue
+            previous = gateway.adapters.pop(route.id, None)
+            if previous is not None and hasattr(previous, "aclose"):
+                await previous.aclose()
+            if app.state.secrets is not None:
+                adapter = adapter_for_route(route, provider, app.state.secrets)
+                if adapter is not None:
+                    gateway.adapters[route.id] = adapter
+
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/health/ready")
+    def readiness() -> dict[str, str]:
+        if repository is None:
+            raise HTTPException(status_code=503, detail="persistence is not configured")
+        if secrets is None:
+            raise HTTPException(status_code=503, detail="secret storage is not configured")
+        try:
+            with repository.database.connect() as connection:
+                connection.execute("SELECT 1").fetchone()
+        except sqlite3.Error as error:
+            raise HTTPException(status_code=503, detail="database is not ready") from error
+        if hasattr(secrets, "check_ready"):
+            try:
+                secrets.check_ready()
+            except (OSError, RuntimeError) as error:
+                raise HTTPException(status_code=503, detail="secret storage is not ready") from error
+        return {"status": "ok", "database": "ok", "secret_storage": "ok"}
 
     @app.get("/")
     def service_info() -> dict:
@@ -177,13 +254,33 @@ def create_app(
             },
         }
 
-    @app.get("/admin", response_class=HTMLResponse)
-    def admin_page():
-        # The browser must be able to load the shell before JavaScript can
-        # prompt for the admin token. The data and mutation endpoints below
-        # remain protected by require_admin.
+    def legacy_admin_html() -> HTMLResponse:
         template = Path(__file__).with_name("templates").joinpath("admin.html")
         return HTMLResponse(template.read_text(encoding="utf-8"))
+
+    @app.get("/admin/legacy", response_class=HTMLResponse)
+    def legacy_admin_page():
+        return legacy_admin_html()
+
+    @app.get("/admin")
+    def admin_page():
+        # Keep Python-only development usable before the React bundle is built.
+        # Production/release builds place the Vite output in static/admin.
+        if app.state.admin_index.is_file():
+            return RedirectResponse(url="/admin/", status_code=307)
+        return legacy_admin_html()
+
+    @app.get("/admin/")
+    def admin_react_index():
+        if app.state.admin_index.is_file():
+            return FileResponse(app.state.admin_index)
+        return legacy_admin_html()
+
+    @app.get("/admin/{path:path}")
+    def admin_react_route(path: str):
+        if app.state.admin_index.is_file():
+            return FileResponse(app.state.admin_index)
+        return legacy_admin_html()
 
     @app.get("/api/admin/overview")
     def admin_overview(request: Request, authorization: Annotated[str | None, Header()] = None):
@@ -220,9 +317,183 @@ def create_app(
         require_admin(request, authorization)
         return {"data": app.state.connection_log.read(max(1, min(limit, 500)))}
 
+    @app.get("/api/admin/tenants")
+    def admin_list_tenants(
+        request: Request,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(request, authorization)
+        return {"data": [tenant.__dict__ for tenant in (repository.list_tenants() if repository else [])]}
+
+    @app.post("/api/admin/tenants", status_code=201)
+    def admin_create_tenant(
+        request: Request,
+        payload: dict,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(request, authorization)
+        if repository is None:
+            raise HTTPException(status_code=503, detail="persistence is not configured")
+        tenant_id = _require_identity_id(payload.get("id"), "tenant id")
+        name = _require_identity_name(payload.get("name"), "tenant name")
+        try:
+            tenant = repository.create_tenant(tenant_id, name)
+        except sqlite3.IntegrityError as error:
+            raise HTTPException(status_code=409, detail="tenant already exists") from error
+        return tenant.__dict__
+
+    @app.get("/api/admin/applications")
+    def admin_list_applications(
+        request: Request,
+        tenant_id: str | None = None,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(request, authorization)
+        applications = repository.list_applications(tenant_id) if repository else []
+        return {"data": [application.__dict__ for application in applications]}
+
+    @app.post("/api/admin/applications", status_code=201)
+    def admin_create_application(
+        request: Request,
+        payload: dict,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(request, authorization)
+        if repository is None:
+            raise HTTPException(status_code=503, detail="persistence is not configured")
+        application_id = _require_identity_id(payload.get("id"), "application id")
+        tenant_id = _require_identity_id(payload.get("tenant_id"), "tenant id")
+        name = _require_identity_name(payload.get("name"), "application name")
+        try:
+            application, application_key = repository.create_application(application_id, tenant_id, name)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="tenant not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except sqlite3.IntegrityError as error:
+            raise HTTPException(status_code=409, detail="application already exists") from error
+        return {"application": application.__dict__, "api_key": application_key}
+
+    @app.get("/api/admin/quotas")
+    def admin_list_quotas(
+        request: Request,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(request, authorization)
+        policies = repository.list_quota_policies() if repository else []
+        return {
+            "data": [
+                {
+                    **policy.__dict__,
+                    "cost_limit": (
+                        None
+                        if policy.cost_limit_micros is None
+                        else round(policy.cost_limit_micros / 1_000_000, 6)
+                    ),
+                }
+                for policy in policies
+            ]
+        }
+
+    @app.put("/api/admin/quotas/{scope_type}/{scope_id}")
+    def admin_set_quota(
+        scope_type: str,
+        scope_id: str,
+        request: Request,
+        payload: dict,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(request, authorization)
+        if repository is None:
+            raise HTTPException(status_code=503, detail="persistence is not configured")
+        if scope_type not in {"tenant", "application"}:
+            raise HTTPException(status_code=422, detail="scope_type must be tenant or application")
+        token_limit = _optional_nonnegative_int(payload.get("token_limit"), "token_limit")
+        cost_limit = _optional_nonnegative_number(payload.get("cost_limit"), "cost_limit")
+        cost_limit_micros = None if cost_limit is None else round(cost_limit * 1_000_000)
+        currency = _pricing_currency(payload.get("currency", "USD"))
+        warning_threshold_percent = _optional_percentage(
+            payload.get("warning_threshold_percent", 80),
+            "warning_threshold_percent",
+        )
+        try:
+            policy = repository.save_quota_policy(
+                scope_type,
+                scope_id,
+                token_limit=token_limit,
+                cost_limit_micros=cost_limit_micros,
+                currency=currency,
+                warning_threshold_percent=warning_threshold_percent,
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=f"{scope_type} not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return {
+            "data": {
+                **policy.__dict__,
+                "cost_limit": (
+                    None
+                    if policy.cost_limit_micros is None
+                    else round(policy.cost_limit_micros / 1_000_000, 6)
+                ),
+            }
+        }
+
+    @app.get("/api/admin/usage")
+    def admin_usage(
+        request: Request,
+        days: int = 7,
+        tenant_id: str | None = None,
+        application_id: str | None = None,
+        provider_id: str | None = None,
+        remote_model: str | None = None,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(request, authorization)
+        if repository is None:
+            return {
+                "data": {
+                    "days": max(1, min(days, 365)),
+                    "filters": {},
+                    "filter_options": {
+                        "tenants": [], "applications": [], "providers": [], "models": []
+                    },
+                    "calls": 0,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "avg_latency_ms": 0.0,
+                    "priced_calls": 0,
+                    "unpriced_calls": 0,
+                    "estimated_costs": [],
+                    "quota_period": None,
+                    "selected_quota": None,
+                    "by_tenant": [],
+                    "by_application": [],
+                    "by_provider": [],
+                    "by_model": [],
+                    "by_day": [],
+                }
+            }
+        return {
+            "data": repository.usage_summary(
+                days,
+                tenant_id=tenant_id,
+                application_id=application_id,
+                provider_id=provider_id,
+                remote_model=remote_model,
+            )
+        }
+
     @app.get("/v1/models")
-    def list_models(authorization: Annotated[str | None, Header()] = None) -> dict:
-        require_token(authorization)
+    def list_models(
+        authorization: Annotated[str | None, Header()] = None,
+        x_free_llm_token: Annotated[
+            str | None, Header(alias="X-Free-LLM-Token")
+        ] = None,
+    ) -> dict:
+        require_token(authorization, x_free_llm_token)
         data = []
         seen_models = set()
         for route in gateway.routes:
@@ -239,25 +510,91 @@ def create_app(
         return {"object": "list", "data": data}
 
     @app.post("/v1/chat/completions")
-    async def chat_completions(payload: dict, authorization: Annotated[str | None, Header()] = None):
-        require_token(authorization)
+    async def chat_completions(
+        payload: dict,
+        response: Response,
+        authorization: Annotated[str | None, Header()] = None,
+        x_free_llm_token: Annotated[
+            str | None, Header(alias="X-Free-LLM-Token")
+        ] = None,
+    ):
+        identity = require_token(authorization, x_free_llm_token)
+        usage_context = {
+            "tenant_id": identity.tenant_id,
+            "application_id": identity.application_id,
+        }
         _require_known_model(payload.get("model", "auto"), gateway)
+        capability = infer_capability(payload)
+        quota_check = _quota_preflight(repository, gateway, identity, payload, capability)
+        quota_headers = _quota_response_headers(quota_check)
+        reservation_id = quota_check.get("reservation_id")
         if payload.get("stream"):
-            return StreamingResponse(gateway.stream(payload), media_type="text/event-stream")
+            async def quota_stream():
+                try:
+                    async for chunk in gateway.stream(payload, usage_context=usage_context):
+                        yield chunk
+                finally:
+                    if repository is not None:
+                        repository.release_quota_reservation(reservation_id)
+
+            return StreamingResponse(
+                quota_stream(),
+                media_type="text/event-stream",
+                headers=quota_headers,
+            )
         try:
-            return await gateway.complete(payload)
+            result = await gateway.complete(
+                payload,
+                capability=capability,
+                usage_context=usage_context,
+            )
+            for name, value in quota_headers.items():
+                response.headers[name] = value
+            return result
         except ProviderError as error:
             raise HTTPException(status_code=error.status_code, detail=error.kind) from error
+        finally:
+            if repository is not None:
+                repository.release_quota_reservation(reservation_id)
 
     @app.post("/v1/images/generations")
-    async def image_generations(payload: dict, authorization: Annotated[str | None, Header()] = None):
-        require_token(authorization)
+    async def image_generations(
+        payload: dict,
+        response: Response,
+        authorization: Annotated[str | None, Header()] = None,
+        x_free_llm_token: Annotated[
+            str | None, Header(alias="X-Free-LLM-Token")
+        ] = None,
+    ):
+        identity = require_token(authorization, x_free_llm_token)
+        usage_context = {
+            "tenant_id": identity.tenant_id,
+            "application_id": identity.application_id,
+        }
         payload = {**payload, "task": "image_generation"}
         _require_known_model(payload.get("model", "auto"), gateway)
+        quota_check = _quota_preflight(
+            repository,
+            gateway,
+            identity,
+            payload,
+            "image_generation",
+        )
+        reservation_id = quota_check.get("reservation_id")
         try:
-            return await gateway.complete(payload, capability="image_generation")
+            result = await gateway.complete(
+                payload,
+                capability="image_generation",
+                usage_context=usage_context,
+            )
+            for name, value in _quota_response_headers(quota_check).items():
+                response.headers[name] = value
+            return result
         except ProviderError as error:
             raise HTTPException(status_code=error.status_code, detail=error.kind) from error
+        finally:
+            if repository is not None:
+                repository.release_quota_reservation(reservation_id)
 
     @app.get("/api/admin/routes")
     def admin_list_routes(request: Request, authorization: Annotated[str | None, Header()] = None):
@@ -271,20 +608,50 @@ def create_app(
         return {"data": [provider.__dict__ for provider in providers]}
 
     @app.post("/api/admin/providers", status_code=201)
-    def admin_create_provider(request: Request, payload: dict, authorization: Annotated[str | None, Header()] = None):
+    async def admin_create_provider(request: Request, payload: dict, authorization: Annotated[str | None, Header()] = None):
         require_admin(request, authorization)
         if repository is None:
             raise HTTPException(status_code=503, detail="persistence is not configured")
-        required = ("id", "name", "protocol", "base_url", "official_url")
-        if any(not isinstance(payload.get(field), str) or not payload[field] for field in required):
-            raise HTTPException(status_code=422, detail="provider fields are required")
-        provider = Provider(*(payload[field] for field in required))
-        if provider.protocol not in SUPPORTED_PROVIDER_PROTOCOLS:
-            raise HTTPException(status_code=422, detail="protocol must be openai, anthropic or gemini")
-        _require_provider_base_url(provider.base_url)
-        _require_public_url(provider.official_url, "official_url")
+        provider = _provider_from_payload(payload)
         repository.save_provider(provider)
+        await refresh_provider_adapters(provider)
         return provider.__dict__
+
+    @app.put("/api/admin/providers/{provider_id}")
+    async def admin_update_provider(
+        provider_id: str,
+        request: Request,
+        payload: dict,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(request, authorization)
+        if repository is None:
+            raise HTTPException(status_code=503, detail="persistence is not configured")
+        current = next((item for item in repository.list_providers() if item.id == provider_id), None)
+        if current is None:
+            raise HTTPException(status_code=404, detail="provider not found")
+        provider = _provider_from_payload(payload)
+        if provider.id != provider_id:
+            raise HTTPException(status_code=422, detail="provider id cannot be changed")
+        repository.save_provider(provider)
+        await refresh_provider_adapters(provider)
+        return provider.__dict__
+
+    @app.delete("/api/admin/providers/{provider_id}", status_code=204)
+    async def admin_delete_provider(
+        provider_id: str,
+        request: Request,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(request, authorization)
+        if repository is None:
+            raise HTTPException(status_code=503, detail="persistence is not configured")
+        current = next((item for item in repository.list_providers() if item.id == provider_id), None)
+        if current is None:
+            raise HTTPException(status_code=404, detail="provider not found")
+        if any(route.provider_id == provider_id for route in repository.list_routes()):
+            raise HTTPException(status_code=409, detail="provider has model routes")
+        repository.delete_provider(provider_id)
 
     @app.post("/api/admin/providers/{provider_id}/discover")
     async def admin_discover_provider(provider_id: str, request: Request, authorization: Annotated[str | None, Header()] = None):
@@ -319,6 +686,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="provider not found")
         if provider.protocol not in SUPPORTED_PROVIDER_PROTOCOLS:
             raise HTTPException(status_code=501, detail="provider model discovery is not supported")
+        _require_provider_base_url(provider.base_url)
         credential = payload.get("credential")
         if not isinstance(credential, str) or not credential.strip():
             raise HTTPException(status_code=422, detail="credential must be a non-empty string")
@@ -384,6 +752,8 @@ def create_app(
                 value = payload[field]
                 if value is not None and not isinstance(value, str):
                     raise HTTPException(status_code=422, detail=f"{field} must be a string or null")
+                if field == "catalog_status" and value not in SUPPORTED_CATALOG_STATUSES:
+                    raise HTTPException(status_code=422, detail="catalog_status must be draft or published")
                 updates[field] = value
         if "reasoning_effort" in payload:
             value = payload["reasoning_effort"]
@@ -403,10 +773,17 @@ def create_app(
             if not isinstance(capabilities, list) or not capabilities or any(not isinstance(item, str) for item in capabilities):
                 raise HTTPException(status_code=422, detail="capabilities must be a non-empty string list")
             updates["capabilities"] = frozenset(capabilities)
+        for field in ("input_price_per_million", "output_price_per_million"):
+            if field in payload:
+                updates[field] = _optional_nonnegative_number(payload[field], field)
+        if "pricing_currency" in payload:
+            updates["pricing_currency"] = _pricing_currency(payload["pricing_currency"])
         provider_id = updates.get("provider_id", current.provider_id)
         if repository and not any(provider.id == provider_id for provider in repository.list_providers()):
             raise HTTPException(status_code=422, detail="provider must exist before updating a route")
-        for field in ("endpoint", "public_url", "public_docs_url"):
+        if updates.get("endpoint"):
+            _require_provider_base_url(updates["endpoint"])
+        for field in ("public_url", "public_docs_url"):
             if updates.get(field):
                 _require_public_url(updates[field], field)
         credential = payload.get("credential")
@@ -465,7 +842,7 @@ def create_app(
         if repository and not any(provider.id == route.provider_id for provider in repository.list_providers()):
             raise HTTPException(status_code=422, detail="provider must exist before adding a route")
         if route.endpoint:
-            _require_public_url(route.endpoint, "endpoint")
+            _require_provider_base_url(route.endpoint)
         if route.public_url:
             _require_public_url(route.public_url, "public_url")
         if route.public_docs_url:
@@ -510,7 +887,18 @@ def create_app(
         if any("enabled" in item and not isinstance(item["enabled"], bool) for item in models):
             raise HTTPException(status_code=422, detail="enabled must be boolean")
 
-        repository.save_provider(provider)
+        existing_provider = next(
+            (item for item in repository.list_providers() if item.id == provider.id),
+            None,
+        )
+        if existing_provider and _provider_connection_key(existing_provider) != _provider_connection_key(provider):
+            raise HTTPException(
+                status_code=409,
+                detail="provider id already belongs to another base URL",
+            )
+        provider = existing_provider or provider
+        if existing_provider is None:
+            repository.save_provider(provider)
         existing = {
             (route.provider_id, route.remote_model): route
             for route in gateway.routes
@@ -542,13 +930,23 @@ def create_app(
                 "public_url": item.get("public_url", payload.get("public_url")),
                 "public_docs_url": item.get("public_docs_url", payload.get("public_docs_url")),
                 "free_summary": item.get("free_summary", payload.get("free_summary")),
+                "catalog_status": item.get("catalog_status", payload.get("catalog_status", "draft")),
                 "capabilities": item.get("capabilities", payload.get("capabilities", ["chat"])),
                 "reasoning_effort": item.get("reasoning_effort", payload.get("reasoning_effort")),
+                "input_price_per_million": item.get(
+                    "input_price_per_million", payload.get("input_price_per_million")
+                ),
+                "output_price_per_million": item.get(
+                    "output_price_per_million", payload.get("output_price_per_million")
+                ),
+                "pricing_currency": item.get(
+                    "pricing_currency", payload.get("pricing_currency", "USD")
+                ),
             }
             route = _route_from_payload(route_payload, priority=next_priority)
             route = replace(route, enabled=route_payload["enabled"])
             if route.endpoint:
-                _require_public_url(route.endpoint, "endpoint")
+                _require_provider_base_url(route.endpoint)
             for field in ("public_url", "public_docs_url"):
                 if getattr(route, field):
                     _require_public_url(getattr(route, field), field)
@@ -624,6 +1022,7 @@ def create_app(
                     "public_url": connection.get("public_url"),
                     "public_docs_url": connection.get("public_docs_url"),
                     "free_summary": connection.get("free_summary"),
+                    "catalog_status": connection.get("catalog_status", "draft"),
                     "capabilities": connection.get("capabilities", ["chat"]),
                 }
                 _validate_connection_metadata(common)
@@ -642,8 +1041,18 @@ def create_app(
                         "public_url": item.get("public_url", common["public_url"]),
                         "public_docs_url": item.get("public_docs_url", common["public_docs_url"]),
                         "free_summary": item.get("free_summary", common["free_summary"]),
+                        "catalog_status": item.get("catalog_status", common["catalog_status"]),
                         "capabilities": item.get("capabilities", common["capabilities"]),
                         "reasoning_effort": item.get("reasoning_effort", connection.get("reasoning_effort")),
+                        "input_price_per_million": item.get(
+                            "input_price_per_million", connection.get("input_price_per_million")
+                        ),
+                        "output_price_per_million": item.get(
+                            "output_price_per_million", connection.get("output_price_per_million")
+                        ),
+                        "pricing_currency": item.get(
+                            "pricing_currency", connection.get("pricing_currency", "USD")
+                        ),
                     }
                     route = _route_from_payload(route_payload, priority=next_priority)
                     route = replace(route, enabled=route_payload["enabled"])
@@ -745,6 +1154,13 @@ def create_app(
 def _route_from_payload(payload: dict, priority: int):
     from .models import ModelRoute
 
+    endpoint = payload.get("endpoint")
+    if endpoint is not None:
+        if not isinstance(endpoint, str) or not endpoint.strip():
+            raise HTTPException(status_code=422, detail="endpoint must be a non-empty string or null")
+        endpoint = endpoint.strip()
+        _require_provider_base_url(endpoint)
+
     return ModelRoute(
         id=payload["id"],
         provider_id=payload["provider_id"],
@@ -753,11 +1169,27 @@ def _route_from_payload(payload: dict, priority: int):
         capabilities=frozenset(payload.get("capabilities", ["chat"])),
         display_name=payload.get("display_name"),
         reasoning_effort=_normalize_reasoning_effort(payload.get("reasoning_effort")),
+        endpoint=endpoint,
         public_url=payload.get("public_url"),
         public_docs_url=payload.get("public_docs_url"),
         free_summary=payload.get("free_summary"),
-        catalog_status=payload.get("catalog_status", "draft"),
+        catalog_status=_catalog_status(payload.get("catalog_status", "draft")),
+        input_price_per_million=_optional_nonnegative_number(
+            payload.get("input_price_per_million"),
+            "input_price_per_million",
+        ),
+        output_price_per_million=_optional_nonnegative_number(
+            payload.get("output_price_per_million"),
+            "output_price_per_million",
+        ),
+        pricing_currency=_pricing_currency(payload.get("pricing_currency", "USD")),
     )
+
+
+def _catalog_status(value: object) -> str:
+    if not isinstance(value, str) or value not in SUPPORTED_CATALOG_STATUSES:
+        raise HTTPException(status_code=422, detail="catalog_status must be draft or published")
+    return value
 
 
 def _normalize_reasoning_effort(value: object) -> str | None:
@@ -818,7 +1250,7 @@ def _validate_connection_models(models: object) -> list[dict]:
 
 
 def _validate_connection_metadata(metadata: dict) -> None:
-    for field in ("display_name", "public_url", "public_docs_url", "free_summary"):
+    for field in ("display_name", "public_url", "public_docs_url", "free_summary", "catalog_status"):
         value = metadata.get(field)
         if value is not None and not isinstance(value, str):
             raise HTTPException(status_code=422, detail=f"{field} must be a string or null")
@@ -838,6 +1270,194 @@ def _bulk_route_id(provider_id: str, remote_model: str) -> str:
     return f"{readable or 'model'}-{digest}"
 
 
+def _optional_nonnegative_int(value: object, field: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise HTTPException(status_code=422, detail=f"{field} must be a non-negative integer or null")
+    return value
+
+
+def _optional_nonnegative_number(value: object, field: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise HTTPException(status_code=422, detail=f"{field} must be a non-negative number or null")
+    return float(value)
+
+
+def _optional_percentage(value: object, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise HTTPException(status_code=422, detail=f"{field} must be a number between 0 and 100")
+    normalized = float(value)
+    if normalized < 0 or normalized > 100:
+        raise HTTPException(status_code=422, detail=f"{field} must be between 0 and 100")
+    return normalized
+
+
+def _estimate_request_quota_projection(
+    payload: dict,
+    gateway: ModelGateway,
+    capability: str,
+) -> dict:
+    if capability == "image_generation":
+        return {
+            "projected_tokens": 0,
+            "projected_costs": {},
+            "cost_projection_complete": False,
+            "token_projection_complete": True,
+        }
+
+    serialized = json.dumps(
+        {key: value for key, value in payload.items() if key != "stream"},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    )
+    input_tokens = max(1, (len(serialized) + 3) // 4)
+    raw_output = payload.get("max_completion_tokens", payload.get("max_tokens"))
+    output_tokens = (
+        raw_output
+        if isinstance(raw_output, int) and not isinstance(raw_output, bool) and raw_output >= 0
+        else 0
+    )
+    output_complete = isinstance(raw_output, int) and not isinstance(raw_output, bool) and raw_output >= 0
+    projected_tokens = input_tokens + output_tokens
+    requested_model = str(payload.get("model", "auto"))
+    candidates = gateway.candidates(requested_model, capability)
+    projected_costs: dict[str, int] = {}
+    cost_complete = bool(candidates) and output_complete
+
+    for route in candidates:
+        currency = (route.pricing_currency or "USD").upper()
+        input_price = route.input_price_per_million
+        output_price = route.output_price_per_million
+        if input_price is None or (output_tokens > 0 and output_price is None):
+            cost_complete = False
+            continue
+        micros = round(
+            input_tokens * float(input_price)
+            + output_tokens * float(output_price or 0)
+        )
+        projected_costs[currency] = max(projected_costs.get(currency, 0), max(0, micros))
+
+    return {
+        "projected_tokens": projected_tokens,
+        "projected_costs": projected_costs,
+        "cost_projection_complete": cost_complete,
+        "token_projection_complete": output_complete,
+    }
+
+
+def _quota_preflight(
+    repository: Repository | None,
+    gateway: ModelGateway,
+    identity: RequestIdentity,
+    payload: dict,
+    capability: str,
+) -> dict:
+    if repository is None:
+        return {
+            "allowed": True,
+            "reservation_id": None,
+            "warnings": [],
+            "checks": [],
+            "period": None,
+        }
+    projection = _estimate_request_quota_projection(payload, gateway, capability)
+    check = repository.reserve_quota(
+        identity.tenant_id,
+        identity.application_id,
+        projected_tokens=projection["projected_tokens"],
+        projected_costs=projection["projected_costs"],
+        token_projection_complete=projection["token_projection_complete"],
+        cost_projection_complete=projection["cost_projection_complete"],
+    )
+    for item in check.get("checks", []):
+        item["token_projection_complete"] = projection["token_projection_complete"]
+    if check.get("allowed"):
+        return check
+
+    violation = check.get("violation") or {"code": "quota_exceeded"}
+    headers = {
+        "X-FreeLLM-Quota-Scope": str(violation.get("scope_type", "")),
+        "X-FreeLLM-Quota-Resource": str(violation.get("resource", "")),
+    }
+    period_end = violation.get("period_end")
+    if isinstance(period_end, str):
+        headers["X-FreeLLM-Quota-Period-End"] = period_end
+        try:
+            end = datetime.fromisoformat(period_end)
+            now = datetime.now(timezone.utc)
+            retry_after = max(1, int((end - now).total_seconds()))
+            headers["Retry-After"] = str(retry_after)
+        except ValueError:
+            pass
+    status_code = (
+        422
+        if violation.get("code") in {
+            "quota_output_limit_required",
+            "quota_cost_projection_unavailable",
+        }
+        else 429
+    )
+    raise HTTPException(status_code=status_code, detail=violation, headers=headers)
+
+
+def _quota_response_headers(check: dict) -> dict[str, str]:
+    warnings = check.get("warnings") or []
+    headers: dict[str, str] = {}
+    if warnings:
+        parts = []
+        for warning in warnings:
+            utilization = warning.get("utilization_percent")
+            utilization_text = "unknown" if utilization is None else f"{float(utilization):.2f}"
+            parts.append(
+                f"{warning.get('scope_type')}:{warning.get('scope_id')}:"
+                f"{warning.get('resource')}:{utilization_text}%"
+            )
+        headers["X-FreeLLM-Quota-Warning"] = ";".join(parts)
+        headers["X-FreeLLM-Quota-Warning-Count"] = str(len(warnings))
+    checks = check.get("checks") or []
+    if any(
+        item.get("token_projection_complete") is False
+        or item.get("cost_projection_complete") is False
+        for item in checks
+    ):
+        headers["X-FreeLLM-Quota-Projection"] = "partial"
+    period = check.get("period") or {}
+    if period.get("end"):
+        headers["X-FreeLLM-Quota-Period-End"] = str(period["end"])
+    return headers
+
+
+def _pricing_currency(value: object) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value.strip()) > 8:
+        raise HTTPException(status_code=422, detail="currency must be a non-empty string up to 8 characters")
+    return value.strip().upper()
+
+
+def _require_identity_id(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        raise HTTPException(status_code=422, detail=f"{field} is required")
+    normalized = value.strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,63}", normalized):
+        raise HTTPException(
+            status_code=422,
+            detail=f"{field} must be 1-64 letters, digits or hyphens",
+        )
+    return normalized
+
+
+def _require_identity_name(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise HTTPException(status_code=422, detail=f"{field} is required")
+    normalized = value.strip()
+    if len(normalized) > 120:
+        raise HTTPException(status_code=422, detail=f"{field} must be at most 120 characters")
+    return normalized
+
+
 def _require_known_model(model: str, gateway: ModelGateway) -> None:
     if model != "auto" and not any(
         route.id == model or route.remote_model == model for route in gateway.routes
@@ -852,14 +1472,10 @@ def _require_public_url(value: str, field: str) -> None:
 
 
 def _require_provider_base_url(value: str) -> None:
-    parsed = urlparse(value)
-    if parsed.username or parsed.password or not parsed.netloc:
-        raise HTTPException(status_code=422, detail="base_url must be a URL without credentials")
-    if parsed.scheme == "https":
-        return
-    if parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}:
-        return
-    raise HTTPException(status_code=422, detail="base_url must be an https URL or loopback http URL")
+    try:
+        validate_provider_target(value, resolve_dns=True)
+    except UnsafeProviderTarget as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 def _with_pool_status(offer: dict, routes: list, provider_names: dict[str, str] | None = None) -> dict:

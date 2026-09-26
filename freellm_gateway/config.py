@@ -20,6 +20,13 @@ class Settings:
     def from_env(cls) -> "Settings":
         api_token = os.getenv("FREELLM_GATEWAY_API_TOKEN")
         admin_token = os.getenv("FREELLM_GATEWAY_ADMIN_TOKEN")
+        require_explicit_tokens = os.getenv(
+            "FREELLM_GATEWAY_REQUIRE_EXPLICIT_TOKENS", ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if require_explicit_tokens and (not api_token or not admin_token):
+            raise RuntimeError(
+                "FREELLM_GATEWAY_API_TOKEN and FREELLM_GATEWAY_ADMIN_TOKEN are required"
+            )
         if not api_token:
             api_token = token_urlsafe(32)
             print(f"FREELLM_GATEWAY_API_TOKEN={api_token}", file=sys.stderr)

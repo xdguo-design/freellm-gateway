@@ -39,10 +39,99 @@ class Database:
                     public_url TEXT,
                     public_docs_url TEXT,
                     free_summary TEXT,
-                    catalog_status TEXT NOT NULL
+                    catalog_status TEXT NOT NULL,
+                    input_price_per_million REAL,
+                    output_price_per_million REAL,
+                    pricing_currency TEXT NOT NULL DEFAULT 'USD'
                 );
+                CREATE TABLE IF NOT EXISTS tenants (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS applications (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    key_prefix TEXT NOT NULL,
+                    key_salt TEXT NOT NULL,
+                    key_hash TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_applications_tenant ON applications(tenant_id);
+                CREATE TABLE IF NOT EXISTS quota_policies (
+                    scope_type TEXT NOT NULL,
+                    scope_id TEXT NOT NULL,
+                    token_limit INTEGER,
+                    cost_limit_micros INTEGER,
+                    currency TEXT NOT NULL DEFAULT 'USD',
+                    warning_threshold_percent REAL NOT NULL DEFAULT 80,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(scope_type, scope_id)
+                );
+                CREATE TABLE IF NOT EXISTS usage_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    request_id TEXT NOT NULL,
+                    tenant_id TEXT NOT NULL DEFAULT 'system',
+                    application_id TEXT NOT NULL DEFAULT 'legacy-global',
+                    route_id TEXT,
+                    provider_id TEXT,
+                    remote_model TEXT,
+                    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                    completion_tokens INTEGER NOT NULL DEFAULT 0,
+                    total_tokens INTEGER NOT NULL DEFAULT 0,
+                    elapsed_ms INTEGER NOT NULL DEFAULT 0,
+                    stream INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL,
+                    estimated_cost_micros INTEGER,
+                    cost_currency TEXT,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_usage_created_at ON usage_records(created_at);
+                CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_records(remote_model);
+                CREATE INDEX IF NOT EXISTS idx_usage_provider ON usage_records(provider_id);
                 """
             )
-            columns = {row["name"] for row in connection.execute("PRAGMA table_info(routes)")}
-            if "reasoning_effort" not in columns:
-                connection.execute("ALTER TABLE routes ADD COLUMN reasoning_effort TEXT")
+            route_columns = {row["name"] for row in connection.execute("PRAGMA table_info(routes)")}
+            route_additions = {
+                "reasoning_effort": "TEXT",
+                "input_price_per_million": "REAL",
+                "output_price_per_million": "REAL",
+                "pricing_currency": "TEXT NOT NULL DEFAULT 'USD'",
+            }
+            for name, ddl in route_additions.items():
+                if name not in route_columns:
+                    connection.execute(f"ALTER TABLE routes ADD COLUMN {name} {ddl}")
+
+            quota_columns = {row["name"] for row in connection.execute("PRAGMA table_info(quota_policies)")}
+            if "warning_threshold_percent" not in quota_columns:
+                connection.execute(
+                    "ALTER TABLE quota_policies ADD COLUMN warning_threshold_percent REAL NOT NULL DEFAULT 80"
+                )
+
+            usage_columns = {row["name"] for row in connection.execute("PRAGMA table_info(usage_records)")}
+            if "tenant_id" not in usage_columns:
+                connection.execute(
+                    "ALTER TABLE usage_records ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'system'"
+                )
+            if "application_id" not in usage_columns:
+                connection.execute(
+                    "ALTER TABLE usage_records ADD COLUMN application_id TEXT NOT NULL DEFAULT 'legacy-global'"
+                )
+            usage_columns = {row["name"] for row in connection.execute("PRAGMA table_info(usage_records)")}
+            usage_additions = {
+                "route_id": "TEXT",
+                "estimated_cost_micros": "INTEGER",
+                "cost_currency": "TEXT",
+            }
+            for name, ddl in usage_additions.items():
+                if name not in usage_columns:
+                    connection.execute(f"ALTER TABLE usage_records ADD COLUMN {name} {ddl}")
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_usage_tenant ON usage_records(tenant_id)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_usage_application ON usage_records(application_id)"
+            )
