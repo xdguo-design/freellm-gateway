@@ -606,7 +606,7 @@ def create_app(
         current = next((item for item in repository.list_providers() if item.id == provider_id), None)
         if current is None:
             raise HTTPException(status_code=404, detail="provider not found")
-        if any(route.provider_id == provider_id for route in gateway.routes):
+        if any(route.provider_id == provider_id for route in repository.list_routes()):
             raise HTTPException(status_code=409, detail="provider has model routes")
         repository.delete_provider(provider_id)
 
@@ -841,7 +841,18 @@ def create_app(
         if any("enabled" in item and not isinstance(item["enabled"], bool) for item in models):
             raise HTTPException(status_code=422, detail="enabled must be boolean")
 
-        repository.save_provider(provider)
+        existing_provider = next(
+            (item for item in repository.list_providers() if item.id == provider.id),
+            None,
+        )
+        if existing_provider and _provider_connection_key(existing_provider) != _provider_connection_key(provider):
+            raise HTTPException(
+                status_code=409,
+                detail="provider id already belongs to another base URL",
+            )
+        provider = existing_provider or provider
+        if existing_provider is None:
+            repository.save_provider(provider)
         existing = {
             (route.provider_id, route.remote_model): route
             for route in gateway.routes
@@ -1240,7 +1251,7 @@ def _estimate_request_quota_projection(
             "projected_tokens": 0,
             "projected_costs": {},
             "cost_projection_complete": False,
-            "token_projection_complete": False,
+            "token_projection_complete": True,
         }
 
     serialized = json.dumps(
