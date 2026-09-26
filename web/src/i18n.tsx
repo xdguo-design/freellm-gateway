@@ -26,6 +26,7 @@ export const messages: Record<Language, Record<string, string>> = {
     "common.save": "保存",
     "common.edit": "编辑",
     "common.delete": "删除",
+    "common.cancel": "取消",
     "common.enable": "启用",
     "common.disable": "停用",
     "common.probe": "探测",
@@ -33,6 +34,14 @@ export const messages: Record<Language, Record<string, string>> = {
     "common.status": "状态",
     "common.model": "模型",
     "common.provider": "Provider",
+    "common.providerId": "Provider ID",
+    "common.baseUrl": "Base URL",
+    "common.apiKey": "API Key",
+    "common.reasoningEffort": "推理强度",
+    "common.token": "Token",
+    "common.apiBase": "API Base",
+    "common.chat": "对话接口",
+    "common.models": "模型接口",
     "common.capability": "能力",
     "common.pricePerMillion": "价格 / 1M",
     "common.runtimeStatus": "运行状态",
@@ -112,7 +121,10 @@ export const messages: Record<Language, Record<string, string>> = {
     "models.saveSelected": "保存选中模型（{count}）",
     "models.providerAddTitle": "添加 Provider",
     "models.providerAddDesc": "同一个 Provider 名称可以有多个连接；连接身份由协议 + Base URL 区分。",
+    "models.providerEditTitle": "编辑 Provider",
+    "models.providerEditDesc": "Provider ID 不可修改；协议或 Base URL 保存后会立即刷新该 Provider 下模型的运行时连接。",
     "models.saveProvider": "保存 Provider",
+    "models.updateProvider": "更新 Provider",
     "models.multiTitle": "多 Provider 批量连接",
     "models.multiDesc": "每个连接独立验证 API Key、选择模型，最后一次提交；失败连接不会污染其他连接。",
     "models.addCustomConnection": "＋ 自定义连接",
@@ -142,6 +154,9 @@ export const messages: Record<Language, Record<string, string>> = {
     "models.probeDone": "批量探测完成：{count} 个路由。",
     "models.discoverDone": "Provider 自动发现新增 {count} 个模型。",
     "models.providerSaved": "Provider 已保存。",
+    "models.providerUpdated": "Provider 已更新，运行时连接已刷新。",
+    "models.providerDeleted": "Provider 已删除。",
+    "models.providerDeleteBlocked": "该 Provider 仍关联 {count} 个模型，请先删除或迁移这些模型。",
     "models.multiNeedValidation": "每个连接都必须先验证，并至少选择一个模型。",
     "models.multiDone": "多连接导入完成：新增 {created}，跳过 {skipped}，失败 {failed}。",
     "usage.title": "Token / Cost 用量",
@@ -157,7 +172,7 @@ export const messages: Record<Language, Record<string, string>> = {
     "usage.estimatedCost": "预计费用",
     "usage.pricedCalls": "已计价 / 总调用",
     "usage.quotaTitle": "月度配额",
-    "usage.quotaDesc": "请求前同时检查 Tenant 与 Application；默认 80% 预警，超限 429。",
+    "usage.quotaDesc": "请求前同时检查 Tenant 与 Application；默认 80% 预警。启用 Token 硬额度时请求必须提供输出上限；启用费用硬额度时必须能完整预估费用。",
     "usage.monthTokenQuota": "月 Token 配额",
     "usage.monthCostBudget": "月费用预算",
     "usage.warningThreshold": "预警阈值 %",
@@ -241,6 +256,10 @@ export const messages: Record<Language, Record<string, string>> = {
     "error.routeExists": "该模型路由已存在。",
     "error.modelsRequired": "至少需要选择一个模型。",
     "error.quotaExceeded": "{scope} 的 {resource} 配额已超限。",
+    "error.quotaOutputLimitRequired": "{scope} 已启用 Token 硬额度，请在请求中提供 max_tokens 或 max_completion_tokens。",
+    "error.quotaCostProjectionUnavailable": "{scope} 已启用费用硬额度，但当前请求无法完整预估费用；请补充输出上限并确认模型价格已配置。",
+    "error.providerHasRoutes": "该 Provider 仍有关联模型，不能直接删除。",
+    "error.providerIdImmutable": "Provider ID 创建后不可修改。",
     "error.generic": "操作失败：{message}"
   },
   en: {
@@ -263,6 +282,7 @@ export const messages: Record<Language, Record<string, string>> = {
     "common.save": "Save",
     "common.edit": "Edit",
     "common.delete": "Delete",
+    "common.cancel": "Cancel",
     "common.enable": "Enable",
     "common.disable": "Disable",
     "common.probe": "Probe",
@@ -270,6 +290,14 @@ export const messages: Record<Language, Record<string, string>> = {
     "common.status": "Status",
     "common.model": "Model",
     "common.provider": "Provider",
+    "common.providerId": "Provider ID",
+    "common.baseUrl": "Base URL",
+    "common.apiKey": "API Key",
+    "common.reasoningEffort": "Reasoning Effort",
+    "common.token": "Token",
+    "common.apiBase": "API Base",
+    "common.chat": "Chat",
+    "common.models": "Models",
     "common.capability": "Capabilities",
     "common.pricePerMillion": "Price / 1M",
     "common.runtimeStatus": "Runtime Status",
@@ -349,7 +377,10 @@ export const messages: Record<Language, Record<string, string>> = {
     "models.saveSelected": "Save Selected ({count})",
     "models.providerAddTitle": "Add Provider",
     "models.providerAddDesc": "A provider name can have multiple connections; protocol + Base URL identifies a connection.",
+    "models.providerEditTitle": "Edit Provider",
+    "models.providerEditDesc": "Provider ID is immutable. Saving a protocol or Base URL change immediately refreshes runtime adapters for this provider.",
     "models.saveProvider": "Save Provider",
+    "models.updateProvider": "Update Provider",
     "models.multiTitle": "Multi-Provider Connections",
     "models.multiDesc": "Validate each API key, select models, then submit once. A failed connection does not contaminate others.",
     "models.addCustomConnection": "＋ Custom Connection",
@@ -379,6 +410,9 @@ export const messages: Record<Language, Record<string, string>> = {
     "models.probeDone": "Probe-all complete: {count} routes checked.",
     "models.discoverDone": "Provider discovery added {count} models.",
     "models.providerSaved": "Provider saved.",
+    "models.providerUpdated": "Provider updated and runtime connections refreshed.",
+    "models.providerDeleted": "Provider deleted.",
+    "models.providerDeleteBlocked": "This Provider still has {count} model routes. Remove or migrate them first.",
     "models.multiNeedValidation": "Every connection must be validated and have at least one selected model.",
     "models.multiDone": "Multi-connection import complete: {created} created, {skipped} skipped, {failed} failed.",
     "usage.title": "Token / Cost Usage",
@@ -394,7 +428,7 @@ export const messages: Record<Language, Record<string, string>> = {
     "usage.estimatedCost": "Estimated Cost",
     "usage.pricedCalls": "Priced / Total Calls",
     "usage.quotaTitle": "Monthly Quotas",
-    "usage.quotaDesc": "Tenant and Application quotas are checked before each request; default warning threshold is 80%, hard limit returns 429.",
+    "usage.quotaDesc": "Tenant and Application quotas are checked before each request. With a hard token quota, requests must provide an output limit; with a hard cost quota, projected cost must be complete.",
     "usage.monthTokenQuota": "Monthly Token Quota",
     "usage.monthCostBudget": "Monthly Cost Budget",
     "usage.warningThreshold": "Warning Threshold %",
@@ -478,6 +512,10 @@ export const messages: Record<Language, Record<string, string>> = {
     "error.routeExists": "This model route already exists.",
     "error.modelsRequired": "Select at least one model.",
     "error.quotaExceeded": "{scope} {resource} quota has been exceeded.",
+    "error.quotaOutputLimitRequired": "{scope} has a hard token quota. Provide max_tokens or max_completion_tokens.",
+    "error.quotaCostProjectionUnavailable": "{scope} has a hard cost quota, but this request cannot be fully priced. Provide an output limit and configure model pricing.",
+    "error.providerHasRoutes": "This Provider still has model routes and cannot be deleted.",
+    "error.providerIdImmutable": "Provider ID cannot be changed after creation.",
     "error.generic": "Operation failed: {message}"
   }
 };
@@ -516,6 +554,16 @@ export function translateErrorDetail(language: Language, error: unknown): string
         resource: String(data.resource ?? "quota"),
       });
     }
+    if (data.code === "quota_output_limit_required") {
+      return translate(language, "error.quotaOutputLimitRequired", {
+        scope: String(data.scope_id ?? data.scope_type ?? ""),
+      });
+    }
+    if (data.code === "quota_cost_projection_unavailable") {
+      return translate(language, "error.quotaCostProjectionUnavailable", {
+        scope: String(data.scope_id ?? data.scope_type ?? ""),
+      });
+    }
   }
   const text = typeof detail === "string" ? detail : String(detail ?? "");
   const lower = text.toLowerCase();
@@ -528,6 +576,8 @@ export function translateErrorDetail(language: Language, error: unknown): string
     ["provider fields are required", "error.providerFields"],
     ["provider must exist before", "error.providerExists"],
     ["provider model discovery is not supported", "error.discoveryUnsupported"],
+    ["provider has model routes", "error.providerHasRoutes"],
+    ["provider id cannot be changed", "error.providerIdImmutable"],
     ["catalog source unavailable", "error.catalogUnavailable"],
     ["base_url must be", "error.baseUrl"],
     ["official_url must be", "error.publicUrl"],
