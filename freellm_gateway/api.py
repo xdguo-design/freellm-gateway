@@ -26,6 +26,7 @@ from .catalog import export_catalog, sync_catalog_to_site
 from .connection_log import ConnectionLogger
 from .discovery import discover_new_routes
 from .models import Provider, RequestIdentity, SUPPORTED_CATALOG_STATUSES, SUPPORTED_PROVIDER_PROTOCOLS
+from .network_safety import UnsafeProviderTarget, validate_provider_target
 from .repository import Repository
 from .runtime import build_gateway
 from .runtime import adapter_for_route
@@ -1418,14 +1419,10 @@ def _require_public_url(value: str, field: str) -> None:
 
 
 def _require_provider_base_url(value: str) -> None:
-    parsed = urlparse(value)
-    if parsed.username or parsed.password or not parsed.netloc:
-        raise HTTPException(status_code=422, detail="base_url must be a URL without credentials")
-    if parsed.scheme == "https":
-        return
-    if parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}:
-        return
-    raise HTTPException(status_code=422, detail="base_url must be an https URL or loopback http URL")
+    try:
+        validate_provider_target(value, resolve_dns=True)
+    except UnsafeProviderTarget as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 def _with_pool_status(offer: dict, routes: list, provider_names: dict[str, str] | None = None) -> dict:
