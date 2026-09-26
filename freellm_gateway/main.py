@@ -1,3 +1,5 @@
+import os
+
 from .api import create_app
 from .config import Settings
 from .db import Database
@@ -11,8 +13,8 @@ def build_default_app():
     repository = Repository(Database(settings.database))
     repository.initialize()
     explicit_secret_store = bool(
-        __import__("os").getenv("FREELLM_GATEWAY_SECRETS_FILE")
-        or __import__("os").getenv("FREELLM_GATEWAY_SECRET_KEY")
+        os.getenv("FREELLM_GATEWAY_SECRETS_FILE")
+        or os.getenv("FREELLM_GATEWAY_SECRET_KEY")
     )
     try:
         secrets = secret_store_from_env()
