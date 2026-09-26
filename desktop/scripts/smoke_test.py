@@ -94,16 +94,16 @@ def main() -> int:
     else:
         print(f"OK   gateway healthy on port {port}")
 
-    # 3. admin UI served
-    if port and not wait_for(
-        lambda: http_ok(f"http://127.0.0.1:{port}/admin") and b"Model Pool" in admin_html(port), 10
-    ):
-        failures.append("admin UI not served correctly")
+    # 3. React admin shell + generated assets are served.
+    if port and not wait_for(lambda: react_admin_ok(port), 10):
+        failures.append("React admin UI or assets were not served correctly")
     else:
-        print("OK   admin UI served")
+        print("OK   React admin shell and assets served")
 
-    # 4. graceful window close = hide to tray (process + gateway stay alive)
-    kill(app, force=False)
+    # 4. graceful window close = hide to tray (process + gateway stay alive).
+    # taskkill is process termination, not a window-close signal, so use the
+    # process MainWindowHandle through CloseMainWindow().
+    close_main_window()
     time.sleep(3)
     if app.poll() is not None:
         failures.append("app exited on graceful window close (should hide to tray)")
@@ -146,10 +146,42 @@ def main() -> int:
 
 def admin_html(port: int) -> bytes:
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/admin", timeout=3) as response:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/admin/", timeout=3) as response:
             return response.read()
     except Exception:
         return b""
+
+
+def react_admin_ok(port: int) -> bool:
+    html = admin_html(port)
+    if b'<div id="root"></div>' not in html:
+        return False
+    marker = b'./assets/'
+    if marker not in html:
+        marker = b'/assets/'
+    if marker not in html:
+        return False
+    text = html.decode("utf-8", errors="ignore")
+    import re
+    match = re.search(r'(?:\./)?assets/[^"']+\.js', text)
+    if not match:
+        return False
+    asset = match.group(0)
+    if not asset.startswith("/"):
+        asset = "/" + asset.removeprefix("./")
+    return http_ok(f"http://127.0.0.1:{port}/admin{asset}")
+
+
+def close_main_window() -> None:
+    subprocess.run(
+        [
+            "powershell", "-NoProfile", "-Command",
+            "$p = Get-Process freellm-studio -ErrorAction SilentlyContinue | "
+            "Select-Object -First 1; if ($p) { [void]$p.CloseMainWindow() }",
+        ],
+        capture_output=True,
+        text=True,
+    )
 
 
 def window_title():
