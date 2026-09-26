@@ -57,6 +57,52 @@ jobs:
           assert any(name.startswith("freellm_gateway/static/admin/assets/") and name.endswith(".css") for name in names)
           PY
 
+      - name: Smoke test installed runnable wheel
+        run: |
+          python -m venv --system-site-packages /tmp/freellm-runtime-venv
+          /tmp/freellm-runtime-venv/bin/python -m pip install --no-deps --force-reinstall /tmp/freellm-wheel/freellm_gateway-*.whl
+          export FREELLM_GATEWAY_API_TOKEN=ci-api-token
+          export FREELLM_GATEWAY_ADMIN_TOKEN=ci-admin-token
+          export FREELLM_GATEWAY_DB=/tmp/freellm-runtime.sqlite3
+          /tmp/freellm-runtime-venv/bin/python -m freellm_gateway run --host 127.0.0.1 --port 18765 --skip-web-build >/tmp/freellm-runtime.log 2>&1 &
+          GATEWAY_PID=$!
+          trap 'kill $GATEWAY_PID || true' EXIT
+          python - <<'PY'
+          import json
+          import time
+          from urllib.request import Request, urlopen
+
+          base = "http://127.0.0.1:18765"
+          last_error = None
+          for _ in range(50):
+              try:
+                  with urlopen(base + "/health", timeout=1) as response:
+                      assert response.status == 200
+                  break
+              except Exception as error:
+                  last_error = error
+                  time.sleep(0.1)
+          else:
+              raise SystemExit(f"gateway did not start: {last_error}")
+
+          with urlopen(base + "/admin/", timeout=2) as response:
+              html = response.read().decode("utf-8")
+          assert '<div id="root"></div>' in html
+          assert "/assets/" in html or "./assets/" in html
+
+          request = Request(
+              base + "/api/admin/overview",
+              headers={"Authorization": "Bearer ci-admin-token"},
+          )
+          with urlopen(request, timeout=2) as response:
+              payload = json.loads(response.read().decode("utf-8"))
+          assert "data" in payload
+          assert payload["data"]["admin_base"] == "/api/admin"
+          PY
+          kill $GATEWAY_PID
+          wait $GATEWAY_PID || true
+          trap - EXIT
+
       - name: Check legacy admin JavaScript syntax
         run: |
           python - <<'PY'
@@ -72,3 +118,11 @@ jobs:
 
       - name: Run Python test suite
         run: python -m pytest -q
+
+      - name: Upload runnable wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: freellm-gateway-runnable-wheel
+          path: /tmp/freellm-wheel/*.whl
+          if-no-files-found: error
+          retention-days: 14
