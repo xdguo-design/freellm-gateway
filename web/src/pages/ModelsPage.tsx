@@ -79,18 +79,20 @@ function ProviderFields({
   value,
   onChange,
   prefix,
+  idReadOnly = false,
 }: {
   value: ProviderDraft;
   onChange: (value: ProviderDraft) => void;
   prefix: string;
+  idReadOnly?: boolean;
 }) {
   const { t } = useI18n();
   return (
     <div className="provider-fields" data-testid={prefix}>
-      <label>Provider ID<input required value={value.id} onChange={(event) => onChange({ ...value, id: event.target.value })} /></label>
+      <label>{t("common.providerId")}<input required readOnly={idReadOnly} value={value.id} onChange={(event) => onChange({ ...value, id: event.target.value })} /></label>
       <label>{t("common.name")}<input required value={value.name} onChange={(event) => onChange({ ...value, name: event.target.value })} /></label>
       <label>{t("common.protocol")}<select value={value.protocol} onChange={(event) => onChange({ ...value, protocol: event.target.value })}><option value="openai">OpenAI Compatible</option><option value="gemini">Gemini Native</option><option value="anthropic">Anthropic Native</option></select></label>
-      <label>Base URL<input required placeholder="https://api.example.com/v1" value={value.base_url} onChange={(event) => onChange({ ...value, base_url: event.target.value })} /></label>
+      <label>{t("common.baseUrl")}<input required placeholder="https://api.example.com/v1" value={value.base_url} onChange={(event) => onChange({ ...value, base_url: event.target.value })} /></label>
       <label>{t("common.officialSite")}<input required placeholder="https://example.com" value={value.official_url} onChange={(event) => onChange({ ...value, official_url: event.target.value })} /></label>
     </div>
   );
@@ -115,6 +117,7 @@ export function ModelsPage({
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [message, setMessage] = useState("");
   const [providerDraft, setProviderDraft] = useState<ProviderDraft>(blankProvider);
+  const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
   const [multiConnections, setMultiConnections] = useState<MultiConnection[]>([]);
 
   const ordered = useMemo(() => [...routes].sort((a, b) => a.priority - b.priority), [routes]);
@@ -371,9 +374,47 @@ export function ModelsPage({
   async function saveProvider(event: FormEvent) {
     event.preventDefault();
     try {
-      await api("/api/admin/providers", { method: "POST", body: providerPayload(providerDraft) });
+      await api(
+        editingProviderId
+          ? `/api/admin/providers/${encodeURIComponent(editingProviderId)}`
+          : "/api/admin/providers",
+        {
+          method: editingProviderId ? "PUT" : "POST",
+          body: providerPayload(providerDraft),
+        },
+      );
       setProviderDraft(blankProvider());
-      setMessage(t("models.providerSaved"));
+      setEditingProviderId(null);
+      setMessage(t(editingProviderId ? "models.providerUpdated" : "models.providerSaved"));
+      await onRefresh();
+    } catch (error) {
+      setMessage(errorText(error));
+    }
+  }
+
+  function editProvider(provider: Provider) {
+    setEditingProviderId(provider.id);
+    setProviderDraft({
+      id: provider.id,
+      name: provider.name,
+      protocol: provider.protocol,
+      base_url: provider.base_url,
+      official_url: provider.official_url,
+    });
+  }
+
+  async function deleteProvider(provider: Provider, routeCount: number) {
+    if (routeCount > 0) {
+      setMessage(t("models.providerDeleteBlocked", { count: routeCount }));
+      return;
+    }
+    try {
+      await api(`/api/admin/providers/${encodeURIComponent(provider.id)}`, { method: "DELETE" });
+      if (editingProviderId === provider.id) {
+        setEditingProviderId(null);
+        setProviderDraft(blankProvider());
+      }
+      setMessage(t("models.providerDeleted"));
       await onRefresh();
     } catch (error) {
       setMessage(errorText(error));
@@ -450,7 +491,7 @@ export function ModelsPage({
           <div><h2>{t("models.title")}</h2><p>{t("models.desc")}</p></div>
           <div className="actions"><button onClick={() => void probeAll()}>{t("models.probeAll")}</button><button className="primary" onClick={() => { setEditing(null); setDraft(blankRoute()); }}>{t("models.add")}</button></div>
         </div>
-        <div className="table-wrap"><table><thead><tr><th>#</th><th>{t("common.model")}</th><th>Provider</th><th>{t("common.capability")}</th><th>{t("common.pricePerMillion")}</th><th>{t("common.runtimeStatus")}</th><th>{t("common.catalogStatus")}</th><th>{t("common.actions")}</th></tr></thead>
+        <div className="table-wrap"><table><thead><tr><th>#</th><th>{t("common.model")}</th><th>{t("common.provider")}</th><th>{t("common.capability")}</th><th>{t("common.pricePerMillion")}</th><th>{t("common.runtimeStatus")}</th><th>{t("common.catalogStatus")}</th><th>{t("common.actions")}</th></tr></thead>
           <tbody>{ordered.map((route, index) => <tr key={route.id}>
             <td>{route.priority}</td>
             <td><b>{route.display_name || route.remote_model}</b><small>{route.remote_model}</small></td>
@@ -475,7 +516,12 @@ export function ModelsPage({
           return <article className="card provider-card" key={provider.id}>
             <div className="section-head"><div><h3>{provider.name}</h3><p>{provider.protocol} · <code>{provider.base_url}</code></p></div><span className="badge muted-badge">{t("models.modelsCount", { count: providerRoutes.length })}</span></div>
             <div className="provider-models">{providerRoutes.map((route) => <div key={route.id}><b>{route.remote_model}</b><span className={`badge ${route.enabled && route.health === "healthy" ? "ok" : "muted-badge"}`}>{status(route.enabled ? route.health : "disabled")}</span></div>)}</div>
-            <div className="actions"><button onClick={() => void discover(provider.id)}>{t("models.discover")}</button><a href={provider.official_url} target="_blank" rel="noreferrer">{t("common.officialSite")} ↗</a></div>
+            <div className="actions">
+              <button onClick={() => editProvider(provider)}>{t("common.edit")}</button>
+              <button onClick={() => void discover(provider.id)}>{t("models.discover")}</button>
+              <button className="danger" disabled={providerRoutes.length > 0} title={providerRoutes.length > 0 ? t("models.providerDeleteBlocked", { count: providerRoutes.length }) : undefined} onClick={() => void deleteProvider(provider, providerRoutes.length)}>{t("common.delete")}</button>
+              <a href={provider.official_url} target="_blank" rel="noreferrer">{t("common.officialSite")} ↗</a>
+            </div>
           </article>;
         })}
       </section>
@@ -484,7 +530,7 @@ export function ModelsPage({
         <form className="card form-card" onSubmit={saveRoute}>
           <div className="section-head"><div><h2>{editing ? t("models.editTitle") : t("models.addBulkTitle")}</h2><p>{t("models.editorDesc")}</p></div><button type="button" onClick={() => { setDraft((current) => ({ ...current, provider_id: CUSTOM_PROVIDER_ID })); setCustomProvider(atomGitPreset(t("models.atomgitProviderName"))); }}>{t("models.atomgitPreset")}</button></div>
           <div className="form-grid">
-            <label>Provider<select required value={draft.provider_id} onChange={(event) => {
+            <label>{t("common.provider")}<select required value={draft.provider_id} onChange={(event) => {
               const providerId = event.target.value;
               const provider = providers.find((item) => item.id === providerId);
               const groqPreset = provider?.name.trim().toLowerCase() === "groq" && !draft.remote_model.trim();
@@ -494,7 +540,7 @@ export function ModelsPage({
             <label>{t("models.displayName")}<input value={draft.display_name} onChange={(event) => setDraft({ ...draft, display_name: event.target.value })} /></label>
             <label>{t("models.priority")}<input type="number" min={1} value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: Number(event.target.value) })} /></label>
             <label>{t("models.capabilitiesCsv")}<input value={draft.capabilities} onChange={(event) => setDraft({ ...draft, capabilities: event.target.value })} /></label>
-            <label>Reasoning Effort<input placeholder="medium / high / low" value={draft.reasoning_effort} onChange={(event) => setDraft({ ...draft, reasoning_effort: event.target.value })} /></label>
+            <label>{t("common.reasoningEffort")}<input placeholder="medium / high / low" value={draft.reasoning_effort} onChange={(event) => setDraft({ ...draft, reasoning_effort: event.target.value })} /></label>
             <label>{t("models.inputPrice")}<input type="number" min="0" step="0.000001" value={draft.input_price_per_million} onChange={(event) => setDraft({ ...draft, input_price_per_million: event.target.value })} /></label>
             <label>{t("models.outputPrice")}<input type="number" min="0" step="0.000001" value={draft.output_price_per_million} onChange={(event) => setDraft({ ...draft, output_price_per_million: event.target.value })} /></label>
             <label>{t("common.currency")}<input value={draft.pricing_currency} maxLength={8} onChange={(event) => setDraft({ ...draft, pricing_currency: event.target.value })} /></label>
@@ -514,9 +560,13 @@ export function ModelsPage({
         </form>
 
         <form className="card form-card" onSubmit={saveProvider}>
-          <div className="section-head"><div><h2>{t("models.providerAddTitle")}</h2><p>{t("models.providerAddDesc")}</p></div></div>
-          <ProviderFields value={providerDraft} onChange={setProviderDraft} prefix="provider-form" />
-          <div className="form-actions"><button type="button" onClick={() => setProviderDraft(atomGitPreset(t("models.atomgitProviderName")))}>{t("models.atomgitPreset")}</button><button className="primary" type="submit">{t("models.saveProvider")}</button></div>
+          <div className="section-head"><div><h2>{t(editingProviderId ? "models.providerEditTitle" : "models.providerAddTitle")}</h2><p>{t(editingProviderId ? "models.providerEditDesc" : "models.providerAddDesc")}</p></div></div>
+          <ProviderFields value={providerDraft} onChange={setProviderDraft} prefix="provider-form" idReadOnly={Boolean(editingProviderId)} />
+          <div className="form-actions">
+            {!editingProviderId && <button type="button" onClick={() => setProviderDraft(atomGitPreset(t("models.atomgitProviderName")))}>{t("models.atomgitPreset")}</button>}
+            {editingProviderId && <button type="button" onClick={() => { setEditingProviderId(null); setProviderDraft(blankProvider()); }}>{t("common.cancel")}</button>}
+            <button className="primary" type="submit">{t(editingProviderId ? "models.updateProvider" : "models.saveProvider")}</button>
+          </div>
         </form>
       </section>
 
@@ -526,7 +576,7 @@ export function ModelsPage({
           {multiConnections.map((item) => <article className="connection-card" key={item.key}>
             <div className="section-head"><div><h3>{item.provider.name || t("models.newConnection")}</h3><p>{item.status === "validated" ? t("models.validatedModels", { count: item.models.length }) : item.status === "validating" ? t("models.validating") : item.error || t("models.pendingValidation")}</p></div><button className="danger" onClick={() => setMultiConnections((current) => current.filter((candidate) => candidate.key !== item.key))}>{t("models.remove")}</button></div>
             <ProviderFields value={item.provider} onChange={(provider) => updateMulti(item.key, { provider, status: "idle", models: [], selected_models: [] })} prefix={`multi-${item.key}`} />
-            <label>API Key<input type="password" value={item.credential} onChange={(event) => updateMulti(item.key, { credential: event.target.value, status: "idle" })} /></label>
+            <label>{t("common.apiKey")}<input type="password" value={item.credential} onChange={(event) => updateMulti(item.key, { credential: event.target.value, status: "idle" })} /></label>
             <div className="form-actions"><button disabled={!item.credential || item.status === "validating"} onClick={() => void validateMulti(item)}>{t("models.validateFetch")}</button></div>
             {!!item.models.length && <div className="check-grid compact">{item.models.map((model) => <label key={model}><input type="checkbox" checked={item.selected_models.includes(model)} onChange={(event) => updateMulti(item.key, { selected_models: event.target.checked ? [...item.selected_models, model] : item.selected_models.filter((value) => value !== model) })} />{model}</label>)}</div>}
           </article>)}
@@ -537,7 +587,7 @@ export function ModelsPage({
 
       <section className="card">
         <div className="section-head"><div><h2>{t("models.logTitle")}</h2><p>{t("models.logDesc")}</p></div></div>
-        <div className="table-wrap"><table><thead><tr><th>{t("models.request")}</th><th>{t("models.route")}</th><th>{t("overview.tenantApp")}</th><th>{t("common.result")}</th><th>{t("common.latency")}</th><th>Token</th></tr></thead><tbody>
+        <div className="table-wrap"><table><thead><tr><th>{t("models.request")}</th><th>{t("models.route")}</th><th>{t("overview.tenantApp")}</th><th>{t("common.result")}</th><th>{t("common.latency")}</th><th>{t("common.token")}</th></tr></thead><tbody>
           {connections.map((entry, index) => <tr key={entry.request_id ?? index}><td><code>{entry.request_id ?? "—"}</code><small>{entry.requested_model ?? ""}</small></td><td>{entry.provider_id ?? "—"}<small>{entry.remote_model ?? ""}</small></td><td>{entry.tenant_id ?? "system"}<small>{entry.application_id ?? "legacy-global"}</small></td><td><span className={`badge ${entry.status === "success" ? "ok" : "bad"}`}>{status(entry.status)}</span></td><td>{entry.elapsed_ms == null ? "—" : `${entry.elapsed_ms} ms`}</td><td>{formatCount(entry.usage?.total_tokens)}</td></tr>)}
           {!connections.length && <tr><td colSpan={6} className="empty">{t("models.noLogs")}</td></tr>}
         </tbody></table></div>
