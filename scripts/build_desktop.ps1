@@ -29,7 +29,7 @@ if (-not (Test-Path $VenvPython)) {
 & $VenvPython -m pip install -e . pyinstaller
 
 Write-Host "[1/4] Building React/TypeScript admin..."
-& $Npm.Source install --prefix web --no-audit --no-fund
+& $Npm.Source ci --prefix web --no-audit --no-fund
 & $Npm.Source run build --prefix web
 
 Write-Host "[2/4] Building Python gateway sidecar..."
@@ -44,7 +44,7 @@ if (Test-Path $Target) {
 Copy-Item (Join-Path $Root "desktop\sidecar\freellm-gateway") $Target -Recurse
 
 Write-Host "[4/4] Building FreeLLM Studio..."
-& $Npm.Source install --prefix desktop --no-audit --no-fund
+& $Npm.Source ci --prefix desktop --no-audit --no-fund
 if ($Debug) {
     & $Npm.Source run build:debug --prefix desktop
 } else {
