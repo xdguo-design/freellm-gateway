@@ -30,7 +30,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     FREELLM_GATEWAY_PORT=8765 \
     FREELLM_GATEWAY_DB=/data/gateway.sqlite3 \
     FREELLM_GATEWAY_CATALOG_OUTPUT=/data/catalog-export.json \
-    FREELLM_GATEWAY_LOG=/data/gateway.log \
     FREELLM_GATEWAY_CONNECTION_LOG=/data/gateway-connections.jsonl \
     FREELLM_GATEWAY_SECRETS_FILE=/data/provider-secrets.json \
     FREELLM_GATEWAY_REQUIRE_EXPLICIT_TOKENS=1
