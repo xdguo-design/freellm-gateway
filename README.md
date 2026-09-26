@@ -4,6 +4,48 @@
 
 ![FreeLLM Studio](docs/screenshots/freellm-studio-overview.png)
 
+## 快速运行
+
+### Windows：一条命令
+
+仓库根目录执行：
+
+```powershell
+.\run.ps1
+```
+
+脚本会自动创建 `.venv`、安装 Python 包，并在首次启动时自动安装/构建 React/TypeScript 管理后台，然后打开：
+
+```text
+http://127.0.0.1:8765/admin/
+```
+
+之后再次运行会复用已经生成的前端 bundle。需要只启动服务、不自动打开浏览器：
+
+```powershell
+.\run.ps1 -NoBrowser
+```
+
+### macOS / Linux
+
+```bash
+sh ./run.sh
+```
+
+### 从 CI wheel 运行
+
+GitHub Actions 的成功构建会产生 artifact：`freellm-gateway-runnable-wheel`。下载 wheel 后：
+
+```bash
+python -m venv .venv
+# Windows: .\.venv\Scripts\activate
+# macOS/Linux: source .venv/bin/activate
+pip install freellm_gateway-*.whl
+python -m freellm_gateway run --open-browser
+```
+
+wheel 已包含 React 管理后台，**运行时不需要 Node.js**。
+
 ## 功能
 
 - 统一管理多个 Provider 和模型
@@ -26,16 +68,16 @@ desktop/src-tauri/target/release/freellm-studio.exe
 
 桌面版会自动启动网关、打开管理台，并将 Provider 注册页转交系统浏览器。
 
-构建桌面版需要 Node.js、Rust stable、Visual Studio C++ Build Tools 和 Python 3.10+：
+构建桌面版需要 Node.js、Rust stable、Visual Studio C++ Build Tools 和 Python 3.10+。仓库根目录执行：
 
 ```powershell
-cd D:\WorkSpace\freellm-gateway
-& D:\Python\Python310\python.exe -m PyInstaller --onedir --noconsole --name freellm-gateway --noconfirm `
-  --distpath desktop/sidecar --add-data 'D:\WorkSpace\freellm-gateway\freellm_gateway\templates;freellm_gateway\templates' `
-  freellm_gateway/desktop_entry.py
-cd desktop
-npm install
-npm run build
+.\scripts\build_desktop.ps1
+```
+
+脚本会依次构建 React 管理台、带 React 静态资源的 Python sidecar，并构建 Tauri/NSIS 桌面应用。快速 Debug 验证：
+
+```powershell
+.\scripts\build_desktop.ps1 -Debug
 ```
 
 更多桌面构建说明见 [`desktop/README.md`](desktop/README.md)。
@@ -47,7 +89,7 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[test]"
 python -m pytest -q
-python -m freellm_gateway.cli run --host 127.0.0.1 --port 8765
+python -m freellm_gateway run --host 127.0.0.1 --port 8765 --open-browser
 ```
 
 管理页面：`http://127.0.0.1:8765/admin`
