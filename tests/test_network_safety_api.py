@@ -20,6 +20,10 @@ class FakeSecrets:
         return self.values.get(reference) or "secret"
 
 
+def admin_headers():
+    return {"Authorization": "Bearer admin"}
+
+
 def make_client(tmp_path):
     repository = Repository(Database(tmp_path / "gateway.sqlite3"))
     secrets = FakeSecrets()
@@ -43,6 +47,7 @@ def test_admin_rejects_metadata_and_private_provider_targets(tmp_path):
     ):
         response = client.post(
             "/api/admin/providers",
+            headers=admin_headers(),
             json={
                 "id": "unsafe",
                 "name": "Unsafe",
@@ -60,6 +65,7 @@ def test_admin_allows_explicit_loopback_http_for_local_development(tmp_path):
 
     response = client.post(
         "/api/admin/providers",
+        headers=admin_headers(),
         json={
             "id": "local",
             "name": "Local",
@@ -88,6 +94,7 @@ def test_admin_rejects_private_route_endpoint_override(tmp_path):
 
     route = client.post(
         "/api/admin/routes",
+        headers=admin_headers(),
         json={
             "id": "route",
             "provider_id": "local",
