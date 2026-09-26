@@ -344,7 +344,8 @@ jobs:
         env:
           FREELLM_DOMAIN: gateway.example.com
         run: |
-          docker compose --env-file .env.cloud.example -f docker-compose.cloud.yml config >/tmp/freellm-compose.yml
+          cp .env.cloud.example .env.cloud
+          docker compose --env-file .env.cloud -f docker-compose.cloud.yml config >/tmp/freellm-compose.yml
           docker run --rm \
             -e FREELLM_DOMAIN=gateway.example.com \
             -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
