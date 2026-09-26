@@ -333,6 +333,125 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
 
+  docker-single-instance:
+    name: Docker single-instance persistence smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build production image
+        run: docker build -t freellm-gateway:ci .
+
+      - name: Start container with persistent volume
+        run: |
+          set -eu
+          SECRET_KEY="$(python -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')"
+          printf 'FREELLM_CI_SECRET_KEY=%s\n' "$SECRET_KEY" >> "$GITHUB_ENV"
+          docker volume create freellm-gateway-ci-data
+          docker run -d             --name freellm-gateway-ci             -p 127.0.0.1:18769:8765             -e FREELLM_GATEWAY_API_TOKEN=ci-cloud-api-token             -e FREELLM_GATEWAY_ADMIN_TOKEN=ci-cloud-admin-token             -e FREELLM_GATEWAY_SECRET_KEY="$SECRET_KEY"             -v freellm-gateway-ci-data:/data             freellm-gateway:ci
+
+      - name: Wait for readiness
+        run: |
+          python - <<'PY'
+          import json
+          import time
+          from urllib.request import urlopen
+
+          url = "http://127.0.0.1:18769/health/ready"
+          last = None
+          for _ in range(120):
+              try:
+                  with urlopen(url, timeout=1) as response:
+                      payload = json.loads(response.read().decode())
+                  assert payload["status"] == "ok"
+                  assert payload["database"] == "ok"
+                  assert payload["secret_storage"] == "ok"
+                  break
+              except Exception as error:
+                  last = error
+                  time.sleep(0.25)
+          else:
+              raise SystemExit(f"container did not become ready: {last}")
+          PY
+
+      - name: Persist provider route and encrypted credential
+        run: |
+          python - <<'PY'
+          import json
+          from urllib.request import Request, urlopen
+
+          payload = {
+              "provider": {
+                  "id": "ci-cloud",
+                  "name": "CI Cloud",
+                  "protocol": "openai",
+                  "base_url": "https://example.invalid/v1",
+                  "official_url": "https://example.invalid",
+              },
+              "models": [{"remote_model": "ci-model"}],
+              "credential": "ci-provider-secret-must-not-appear-on-disk",
+          }
+          request = Request(
+              "http://127.0.0.1:18769/api/admin/routes/bulk",
+              data=json.dumps(payload).encode(),
+              headers={
+                  "Authorization": "Bearer ci-cloud-admin-token",
+                  "Content-Type": "application/json",
+              },
+              method="POST",
+          )
+          with urlopen(request, timeout=5) as response:
+              assert response.status == 200
+          PY
+
+          docker exec freellm-gateway-ci python - <<'PY'
+          from pathlib import Path
+          path = Path("/data/provider-secrets.json")
+          assert path.is_file()
+          content = path.read_text(encoding="utf-8")
+          assert "ci-provider-secret-must-not-appear-on-disk" not in content
+          PY
+
+      - name: Restart against the same persistent volume
+        run: |
+          docker rm -f freellm-gateway-ci
+          docker run -d             --name freellm-gateway-ci             -p 127.0.0.1:18769:8765             -e FREELLM_GATEWAY_API_TOKEN=ci-cloud-api-token             -e FREELLM_GATEWAY_ADMIN_TOKEN=ci-cloud-admin-token             -e FREELLM_GATEWAY_SECRET_KEY="$FREELLM_CI_SECRET_KEY"             -v freellm-gateway-ci-data:/data             freellm-gateway:ci
+
+          python - <<'PY'
+          import json
+          import time
+          from urllib.request import Request, urlopen
+
+          ready = "http://127.0.0.1:18769/health/ready"
+          for _ in range(120):
+              try:
+                  with urlopen(ready, timeout=1) as response:
+                      assert response.status == 200
+                  break
+              except Exception:
+                  time.sleep(0.25)
+          else:
+              raise SystemExit("restarted container did not become ready")
+
+          request = Request(
+              "http://127.0.0.1:18769/api/admin/routes",
+              headers={"Authorization": "Bearer ci-cloud-admin-token"},
+          )
+          with urlopen(request, timeout=5) as response:
+              payload = json.loads(response.read().decode())
+          assert any(
+              route["provider_id"] == "ci-cloud" and route["remote_model"] == "ci-model"
+              for route in payload["data"]
+          )
+          PY
+
+      - name: Cleanup Docker smoke
+        if: always()
+        run: |
+          docker rm -f freellm-gateway-ci 2>/dev/null || true
+          docker volume rm freellm-gateway-ci-data 2>/dev/null || true
+
   release-gate:
     name: RELEASE GATE
     if: always()
@@ -341,6 +460,7 @@ jobs:
       - browser-e2e
       - windows-runtime
       - desktop-windows
+      - docker-single-instance
     runs-on: ubuntu-latest
     steps:
       - name: Require every release check
@@ -349,10 +469,12 @@ jobs:
           BROWSER_RESULT: ${{ needs.browser-e2e.result }}
           WINDOWS_RESULT: ${{ needs.windows-runtime.result }}
           DESKTOP_RESULT: ${{ needs.desktop-windows.result }}
+          DOCKER_RESULT: ${{ needs.docker-single-instance.result }}
         run: |
-          printf 'python=%s\nbrowser=%s\nwindows=%s\ndesktop=%s\n' \
-            "$PYTHON_RESULT" "$BROWSER_RESULT" "$WINDOWS_RESULT" "$DESKTOP_RESULT"
+          printf 'python=%s\nbrowser=%s\nwindows=%s\ndesktop=%s\ndocker=%s\n' \
+            "$PYTHON_RESULT" "$BROWSER_RESULT" "$WINDOWS_RESULT" "$DESKTOP_RESULT" "$DOCKER_RESULT"
           test "$PYTHON_RESULT" = success
           test "$BROWSER_RESULT" = success
           test "$WINDOWS_RESULT" = success
           test "$DESKTOP_RESULT" = success
+          test "$DOCKER_RESULT" = success
