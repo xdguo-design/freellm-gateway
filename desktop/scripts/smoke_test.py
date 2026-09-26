@@ -163,7 +163,7 @@ def react_admin_ok(port: int) -> bool:
         return False
     text = html.decode("utf-8", errors="ignore")
     import re
-    match = re.search(r'(?:\./)?assets/[^"']+\.js', text)
+    match = re.search(r"""(?:\./)?assets/[^"']+\.js""", text)
     if not match:
         return False
     asset = match.group(0)
