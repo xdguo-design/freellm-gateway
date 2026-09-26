@@ -1,6 +1,7 @@
 from .adapters.anthropic import AnthropicAdapter, anthropic_messages_endpoint
 from .adapters.gemini import GeminiAdapter
 from .adapters.openai import OpenAICompatibleAdapter
+from .network_safety import UnsafeProviderTarget, validate_provider_target
 from .repository import Repository
 from .service import ModelGateway
 
@@ -23,16 +24,23 @@ def adapter_for_route(route, provider, secrets):
     api_key = secrets.get(route.credential_ref)
     if not api_key:
         return None
-    return adapter_for_provider(provider, api_key, route.endpoint)
+    try:
+        return adapter_for_provider(provider, api_key, route.endpoint)
+    except UnsafeProviderTarget:
+        return None
 
 
 def adapter_for_provider(provider, api_key: str, endpoint: str | None = None):
     if provider.protocol == "openai":
         endpoint = endpoint or provider.base_url.rstrip("/") + "/chat/completions"
+        validate_provider_target(endpoint, resolve_dns=True)
         return OpenAICompatibleAdapter(endpoint, api_key)
     if provider.protocol == "anthropic":
         endpoint = endpoint or anthropic_messages_endpoint(provider.base_url)
+        validate_provider_target(endpoint, resolve_dns=True)
         return AnthropicAdapter(endpoint, api_key)
     if provider.protocol == "gemini":
-        return GeminiAdapter(endpoint or provider.base_url, api_key)
+        target = endpoint or provider.base_url
+        validate_provider_target(target, resolve_dns=True)
+        return GeminiAdapter(target, api_key)
     return None
