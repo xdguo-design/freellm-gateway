@@ -26,7 +26,15 @@ def _is_loopback_host(host: str) -> bool:
 
 def _is_public_address(value: str) -> bool:
     address = ip_address(value.split("%", 1)[0])
-    return address.is_global
+    return (
+        address.is_global
+        and not address.is_private
+        and not address.is_loopback
+        and not address.is_link_local
+        and not address.is_multicast
+        and not address.is_reserved
+        and not address.is_unspecified
+    )
 
 
 def resolve_host_addresses(host: str, port: int) -> set[str]:
@@ -57,13 +65,13 @@ def validate_provider_target(value: str, *, resolve_dns: bool = True) -> None:
     if parsed.scheme == "http":
         if _is_loopback_host(host):
             return
-        raise UnsafeProviderTarget("HTTP provider URLs are allowed only for loopback development targets")
+        raise UnsafeProviderTarget("provider URL must be an https URL or loopback HTTP target")
 
     if parsed.scheme != "https":
         raise UnsafeProviderTarget("provider URL must use HTTPS or loopback HTTP")
 
     literal = _address_from_host(host)
-    if literal is not None and not literal.is_global:
+    if literal is not None and not _is_public_address(str(literal)):
         raise UnsafeProviderTarget("provider URL must not target a non-public IP address")
 
     if not resolve_dns or literal is not None:
