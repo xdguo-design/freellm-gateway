@@ -52,6 +52,10 @@ class Repository:
             rows = connection.execute("SELECT * FROM providers ORDER BY name, id").fetchall()
         return [Provider(row["id"], row["name"], row["protocol"], row["base_url"], row["official_url"]) for row in rows]
 
+    def delete_provider(self, provider_id: str) -> None:
+        with self.database.connect() as connection:
+            connection.execute("DELETE FROM providers WHERE id = ?", (provider_id,))
+
     def save_route(self, route: ModelRoute) -> None:
         with self.database.connect() as connection:
             connection.execute(
