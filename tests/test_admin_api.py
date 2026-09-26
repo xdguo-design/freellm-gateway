@@ -175,6 +175,21 @@ def test_admin_api_allows_loopback_without_token_but_rejects_remote_clients():
     assert remote.get("/api/admin/overview").status_code == 401
 
 
+def test_admin_api_accepts_workbuddy_proxy_token_header():
+    app = create_app(ModelGateway([], {}), api_token="api", admin_token="admin")
+    remote = TestClient(app, client=("192.0.2.10", 50000))
+
+    response = remote.get(
+        "/api/admin/overview",
+        headers={
+            "Authorization": "Bearer proxy-owned-value",
+            "X-Free-LLM-Token": "admin",
+        },
+    )
+
+    assert response.status_code == 200
+
+
 def test_admin_page_exposes_model_fetch_key_and_registration_controls():
     app = create_app(ModelGateway([], {}), api_token="api", admin_token="admin")
     response = TestClient(app).get("/admin/legacy")

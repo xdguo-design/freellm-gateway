@@ -137,7 +137,10 @@ Configure the CloudBase service as follows:
    Generate secrets as described above; never use the example placeholders.
 5. Configure readiness to `GET /health/ready` and liveness to
    `GET /health`. Publish the admin UI at `/admin/` and the compatible API
-   under `/v1` through the service's HTTPS endpoint.
+   under `/v1` through the service's HTTPS endpoint. WorkBuddy's reverse
+   proxy owns the `Authorization` header, so remote calls should send the
+   appropriate API/Admin credential as `X-Free-LLM-Token: <token>`.
+   The browser admin does this automatically.
 6. Back up the complete mounted `/data` volume and the encryption key
    separately. Test restoring both before relying on the service.
 
@@ -168,9 +171,12 @@ curl -fsS "https://$FREELLM_DOMAIN/health/ready"
 ```
 
 The admin UI is then available at `https://$FREELLM_DOMAIN/admin/`. Remote
-admin API calls require `Authorization: Bearer <FREELLM_GATEWAY_ADMIN_TOKEN>`;
-normal OpenAI-compatible client calls under `/v1` use
-`FREELLM_GATEWAY_API_TOKEN` or an application key.
+admin API calls accept either
+`Authorization: Bearer <FREELLM_GATEWAY_ADMIN_TOKEN>` or
+`X-Free-LLM-Token: <FREELLM_GATEWAY_ADMIN_TOKEN>`. Normal OpenAI-compatible
+client calls under `/v1` likewise accept Bearer auth or
+`X-Free-LLM-Token`, using `FREELLM_GATEWAY_API_TOKEN` or an application key.
+When a hosting proxy reserves `Authorization`, use `X-Free-LLM-Token`.
 
 ## Backup and restore
 

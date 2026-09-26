@@ -39,6 +39,40 @@ def test_models_endpoint_requires_token_and_hides_provider_secrets():
     assert "keyring" not in response.text
 
 
+def test_models_endpoint_accepts_workbuddy_proxy_token_header():
+    route = ModelRoute(
+        id="groq-llama", provider_id="groq", remote_model="llama", priority=1,
+    )
+    client = client_for([route])
+
+    response = client.get(
+        "/v1/models",
+        headers={
+            "Authorization": "Bearer proxy-owned-value",
+            "X-Free-LLM-Token": "api-token",
+        },
+    )
+
+    assert response.status_code == 200
+    assert {item["id"] for item in response.json()["data"]} == {"auto", "llama"}
+
+
+def test_cors_allows_workbuddy_proxy_token_header():
+    client = client_for([])
+
+    response = client.options(
+        "/v1/models",
+        headers={
+            "Origin": "http://localhost",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "X-Free-LLM-Token",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "x-free-llm-token" in response.headers["access-control-allow-headers"].lower()
+
+
 def test_chat_completions_accepts_the_upstream_model_name():
     route = ModelRoute(id="google-gemini-route", provider_id="google-gemini", remote_model="gemini-3.8-flash", priority=1)
     client = client_for([route])
