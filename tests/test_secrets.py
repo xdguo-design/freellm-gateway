@@ -68,3 +68,13 @@ def test_secret_store_from_env_requires_file_and_key_together(monkeypatch, tmp_p
 
     with pytest.raises(RuntimeError, match="must be set together"):
         secret_store_from_env()
+
+
+def test_encrypted_file_secret_store_readiness_checks_volume(tmp_path):
+    path = tmp_path / "nested" / "provider-secrets.json"
+    store = EncryptedFileSecretStore(path, Fernet.generate_key().decode("ascii"))
+
+    store.check_ready()
+
+    assert path.parent.is_dir()
+    assert list(path.parent.glob(".freellm-secret-ready-*")) == []
