@@ -38,6 +38,40 @@ def make_client(routes=None, adapters=None, **kwargs):
     return TestClient(create_app(gateway=gateway, api_token="api", admin_token="admin", **kwargs)), gateway
 
 
+def test_readiness_requires_database_and_secret_storage(tmp_path):
+    repository = Repository(Database(tmp_path / "gateway.sqlite3"))
+    ready = TestClient(
+        create_app(
+            ModelGateway([], {}),
+            repository=repository,
+            secrets=FakeSecrets(),
+            api_token="api",
+            admin_token="admin",
+        )
+    )
+    unavailable = TestClient(
+        create_app(
+            ModelGateway([], {}),
+            repository=repository,
+            secrets=None,
+            api_token="api",
+            admin_token="admin",
+        )
+    )
+
+    response = ready.get("/health/ready")
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "database": "ok",
+        "secret_storage": "ok",
+    }
+
+    response = unavailable.get("/health/ready")
+    assert response.status_code == 503
+    assert response.json()["detail"] == "secret storage is not configured"
+
+
 def test_public_root_describes_openai_compatible_api():
     client, _ = make_client()
 
